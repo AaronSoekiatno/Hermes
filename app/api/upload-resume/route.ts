@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import {
   validateFile,
-  extractTextFromFile,
+  extractDocxText,
+  isPdfFile,
   cleanJsonResponse,
   type ResumeExtractionResult,
   type ResumeProcessingResult,
@@ -11,37 +12,72 @@ import { addCandidate } from '@/lib/helix';
 
 export const runtime = 'nodejs';
 
-// Configure body size limit for large file uploads (Next.js 13+)
-export const config = {
-  api: {
-    bodyParser: false,
-  },
-};
-
 // Initialize Gemini client
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 
 /**
- * Extracts name, email, skills, and summary from resume text using Gemini
+ * Extracts name, email, skills, and summary from resume using Gemini
+ * Supports both PDF (sent directly as base64) and DOCX (text extracted first)
  */
 async function extractResumeDataWithGemini(
-  resumeText: string
+  file: File,
+  buffer: Buffer
 ): Promise<ResumeExtractionResult> {
   const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
-  const prompt = `Extract the following from the resume text below and return JSON only in this exact form:
+  const prompt = `Extract the following from this resume and return JSON only in this exact form:
 {
   "name": "Full name of the candidate",
   "email": "Email address (or empty string if not found)",
   "skills": ["Array of 6-12 relevant skills or keywords"],
   "summary": "A 2-3 sentence professional overview of the candidate"
-}
+}`;
 
-Here is the resume text:
+  let result;
+  
+  try {
+    if (isPdfFile(file)) {
+      // For PDFs: Convert to base64 and send directly to Gemini
+      // Gemini 1.5 supports PDF files natively via inline data
+      const base64Data = buffer.toString('base64');
+      
+      result = await model.generateContent([
+        prompt,
+        {
+          inlineData: {
+            data: base64Data,
+            mimeType: 'application/pdf',
+          },
+        },
+      ]);
+    } else {
+      // For DOCX: Extract text first, then send to Gemini
+      const resumeText = await extractDocxText(buffer);
+      
+      if (!resumeText || resumeText.trim().length === 0) {
+        throw new Error('Could not extract text from DOCX file. The file may be corrupted or empty.');
+      }
+      
+      result = await model.generateContent(`${prompt}\n\nHere is the resume text:\n\n${resumeText}`);
+    }
+  } catch (error: any) {
+    // Provide more specific error messages
+    if (error?.message?.includes('API_KEY')) {
+      throw new Error('Invalid or missing Gemini API key. Please check your GEMINI_API_KEY environment variable.');
+    }
+    if (error?.message?.includes('QUOTA') || error?.message?.includes('quota')) {
+      throw new Error('Gemini API quota exceeded. Please check your API usage limits.');
+    }
+    if (error?.message?.includes('SAFETY') || error?.message?.includes('safety')) {
+      throw new Error('Content was blocked by Gemini safety filters. Please try a different resume.');
+    }
+    if (error?.message?.includes('SIZE') || error?.message?.includes('size') || error?.message?.includes('too large')) {
+      throw new Error('File is too large. Maximum file size is 10MB.');
+    }
+    // Re-throw with original message for other errors
+    throw new Error(`Gemini API error: ${error?.message || 'Unknown error occurred while processing the file'}`);
+  }
 
-${resumeText}`;
-
-  const result = await model.generateContent(prompt);
   const response = result.response;
   const responseText = response.text();
 
@@ -147,7 +183,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Read file as buffer with streaming for large files
+    // Read file as buffer
     let buffer: Buffer;
     try {
       const bytes = await file!.arrayBuffer();
@@ -162,37 +198,64 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Extract text from the file
-    let rawText: string;
-    try {
-      rawText = await extractTextFromFile(file!, buffer);
-    } catch (error) {
-      return NextResponse.json(
-        {
-          success: false,
-          error:
-            error instanceof Error
-              ? error.message
-              : 'Failed to extract text from the file.',
-        },
-        { status: 400 }
-      );
-    }
-
     // Extract name, email, skills, and summary using Gemini
+    // For PDFs: Gemini processes the file directly (no parsing needed!)
+    // For DOCX: Text is extracted first, then sent to Gemini
     let extractionResult: ResumeExtractionResult;
+    let rawText: string = '';
+    
     try {
-      extractionResult = await extractResumeDataWithGemini(rawText);
+      extractionResult = await extractResumeDataWithGemini(file!, buffer);
+      
+      // Extract raw text for response (only needed for DOCX, PDF is processed directly)
+      if (!isPdfFile(file!)) {
+        rawText = await extractDocxText(buffer);
+      } else {
+        // For PDFs, Gemini processed it directly - no text extraction needed
+        rawText = 'PDF processed directly by Gemini (no text extraction required)';
+      }
     } catch (error) {
-      console.error('Gemini skills extraction error:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      const errorStack = error instanceof Error ? error.stack : undefined;
+      
+      console.error('Gemini skills extraction error:', {
+        message: errorMessage,
+        stack: errorStack,
+        fileType: file!.type,
+        fileName: file!.name,
+        fileSize: file!.size,
+      });
+      
+      // Return more helpful error messages based on the error type
+      let userMessage = 'Failed to analyze resume content.';
+      let statusCode = 500;
+      
+      if (errorMessage.includes('API key')) {
+        userMessage = 'Server configuration error: Invalid or missing Gemini API key.';
+        statusCode = 500;
+      } else if (errorMessage.includes('quota')) {
+        userMessage = 'API quota exceeded. Please try again later.';
+        statusCode = 429;
+      } else if (errorMessage.includes('safety')) {
+        userMessage = 'Content was blocked by safety filters. Please try a different resume.';
+        statusCode = 400;
+      } else if (errorMessage.includes('too large')) {
+        userMessage = 'File is too large. Maximum file size is 10MB.';
+        statusCode = 400;
+      } else if (errorMessage.includes('extract text')) {
+        userMessage = 'Could not read the file. Please ensure it is a valid PDF or DOCX file.';
+        statusCode = 400;
+      } else {
+        userMessage = `Failed to analyze resume: ${errorMessage}`;
+      }
+      
       return NextResponse.json(
         {
           success: false,
-          error:
-            'Failed to analyze resume content. Please try again or contact support.',
-          details: error instanceof Error ? error.message : 'Unknown error',
+          error: userMessage,
+          details: errorMessage,
         },
-        { status: 500 }
+        { status: statusCode }
       );
     }
 
@@ -217,16 +280,32 @@ export async function POST(request: NextRequest) {
     }
 
     // Save candidate to HelixDB
+    let savedToDatabase = false;
+    let databaseError: string | undefined;
     try {
-      await addCandidate({
+      const dbResult = await addCandidate({
         name: extractionResult.name,
         email: extractionResult.email,
         summary: extractionResult.summary,
         skills: extractionResult.skills.join(', '),
         embedding,
       });
+      savedToDatabase = true;
+      console.log('Successfully saved candidate to HelixDB:', {
+        name: extractionResult.name,
+        email: extractionResult.email,
+        dbResult,
+      });
     } catch (error) {
-      console.error('Failed to save candidate to HelixDB:', error);
+      databaseError = error instanceof Error ? error.message : 'Unknown database error';
+      console.error('Failed to save candidate to HelixDB:', {
+        error: databaseError,
+        candidate: {
+          name: extractionResult.name,
+          email: extractionResult.email,
+        },
+        fullError: error,
+      });
       // Continue even if DB save fails - we still want to return the extracted data
     }
 
@@ -239,6 +318,8 @@ export async function POST(request: NextRequest) {
       skills: extractionResult.skills,
       summary: extractionResult.summary,
       embedding,
+      savedToDatabase,
+      ...(databaseError && { databaseError }),
     };
 
     return NextResponse.json(result, { status: 200 });

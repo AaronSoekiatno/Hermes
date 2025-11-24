@@ -2,6 +2,7 @@
 target/
 *.log
 node_modules
+.next
 
 # Environment variables
 .env

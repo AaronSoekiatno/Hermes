@@ -21,10 +21,9 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
  */
 async function extractResumeDataWithGemini(
   file: File,
-  buffer: Buffer
+  buffer: Buffer,
+  arrayBuffer: ArrayBuffer
 ): Promise<ResumeExtractionResult> {
-  const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
-
   const prompt = `Extract the following from this resume and return JSON only in this exact form:
 {
   "name": "Full name of the candidate",
@@ -33,90 +32,103 @@ async function extractResumeDataWithGemini(
   "summary": "A 2-3 sentence professional overview of the candidate"
 }`;
 
-  let result;
-  
-  try {
-    if (isPdfFile(file)) {
-      // For PDFs: Convert to base64 and send directly to Gemini
-      // Gemini 1.5 supports PDF files natively via inline data
-      const base64Data = buffer.toString('base64');
-      
-      result = await model.generateContent([
-        prompt,
-        {
-          inlineData: {
-            data: base64Data,
-            mimeType: 'application/pdf',
+  // Try different model names in order of preference
+  const modelNames = ['gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-pro'];
+  let lastError: any = null;
+
+  for (const modelName of modelNames) {
+    try {
+      const model = genAI.getGenerativeModel({ model: modelName });
+      let result;
+
+      if (isPdfFile(file)) {
+        // For PDFs: Try to send directly to Gemini (works with 1.5 models)
+        // If this fails (e.g., with gemini-pro), we'll catch and try next model
+        // Convert ArrayBuffer to base64 string
+        const uint8Array = new Uint8Array(arrayBuffer);
+        const base64Data = Buffer.from(uint8Array).toString('base64');
+
+        // Use the simplified array format with proper inlineData structure
+        result = await model.generateContent([
+          prompt,
+          {
+            inlineData: {
+              data: base64Data,
+              mimeType: 'application/pdf',
+            },
           },
-        },
-      ]);
-    } else {
-      // For DOCX: Extract text first, then send to Gemini
-      const resumeText = await extractDocxText(buffer);
-      
-      if (!resumeText || resumeText.trim().length === 0) {
-        throw new Error('Could not extract text from DOCX file. The file may be corrupted or empty.');
+        ]);
+      } else {
+        // For DOCX: Extract text first, then send to Gemini
+        const resumeText = await extractDocxText(buffer);
+        
+        if (!resumeText || resumeText.trim().length === 0) {
+          throw new Error('Could not extract text from DOCX file. The file may be corrupted or empty.');
+        }
+        
+        result = await model.generateContent(`${prompt}\n\nHere is the resume text:\n\n${resumeText}`);
       }
-      
-      result = await model.generateContent(`${prompt}\n\nHere is the resume text:\n\n${resumeText}`);
+
+      // If we get here, the model worked - process the response
+      const response = result.response;
+      const responseText = response.text();
+      const cleanedResponse = cleanJsonResponse(responseText);
+      const parsed = JSON.parse(cleanedResponse) as ResumeExtractionResult;
+
+      // Validate the response structure
+      if (typeof parsed.name !== 'string') {
+        throw new Error('Invalid response: name must be a string');
+      }
+      if (typeof parsed.email !== 'string') {
+        throw new Error('Invalid response: email must be a string');
+      }
+      if (!Array.isArray(parsed.skills)) {
+        throw new Error('Invalid response: skills must be an array');
+      }
+      if (typeof parsed.summary !== 'string') {
+        throw new Error('Invalid response: summary must be a string');
+      }
+
+      // Ensure skills count is between 6-12
+      if (parsed.skills.length < 6) {
+        console.warn(
+          `Gemini returned fewer than 6 skills (${parsed.skills.length})`
+        );
+      }
+      if (parsed.skills.length > 12) {
+        parsed.skills = parsed.skills.slice(0, 12);
+      }
+
+      return parsed;
+    } catch (error: any) {
+      // If it's a model not found error (404), try the next model
+      if (error?.message?.includes('not found') || error?.message?.includes('404')) {
+        lastError = error;
+        console.warn(`Model ${modelName} not available, trying next model...`);
+        continue;
+      }
+      // If it's a 400 error with inline_data issue, the model doesn't support native PDF
+      // Try the next model (should be a 1.5 model that supports it)
+      if (
+        error?.message?.includes('400') ||
+        error?.message?.includes('Bad Request') ||
+        error?.message?.includes('inline_data') ||
+        error?.message?.includes('scalar field')
+      ) {
+        lastError = error;
+        console.warn(`Model ${modelName} doesn't support native PDF processing (${error?.message}), trying next model...`);
+        continue;
+      }
+      // For other errors (parsing, validation, etc.), re-throw immediately
+      throw error;
     }
-  } catch (error: any) {
-    // Provide more specific error messages
-    if (error?.message?.includes('API_KEY')) {
-      throw new Error('Invalid or missing Gemini API key. Please check your GEMINI_API_KEY environment variable.');
-    }
-    if (error?.message?.includes('QUOTA') || error?.message?.includes('quota')) {
-      throw new Error('Gemini API quota exceeded. Please check your API usage limits.');
-    }
-    if (error?.message?.includes('SAFETY') || error?.message?.includes('safety')) {
-      throw new Error('Content was blocked by Gemini safety filters. Please try a different resume.');
-    }
-    if (error?.message?.includes('SIZE') || error?.message?.includes('size') || error?.message?.includes('too large')) {
-      throw new Error('File is too large. Maximum file size is 10MB.');
-    }
-    // Re-throw with original message for other errors
-    throw new Error(`Gemini API error: ${error?.message || 'Unknown error occurred while processing the file'}`);
   }
 
-  const response = result.response;
-  const responseText = response.text();
-
-  const cleanedResponse = cleanJsonResponse(responseText);
-
-  try {
-    const parsed = JSON.parse(cleanedResponse) as ResumeExtractionResult;
-
-    // Validate the response structure
-    if (typeof parsed.name !== 'string') {
-      throw new Error('Invalid response: name must be a string');
-    }
-    if (typeof parsed.email !== 'string') {
-      throw new Error('Invalid response: email must be a string');
-    }
-    if (!Array.isArray(parsed.skills)) {
-      throw new Error('Invalid response: skills must be an array');
-    }
-    if (typeof parsed.summary !== 'string') {
-      throw new Error('Invalid response: summary must be a string');
-    }
-
-    // Ensure skills count is between 6-12
-    if (parsed.skills.length < 6) {
-      console.warn(
-        `Gemini returned fewer than 6 skills (${parsed.skills.length})`
-      );
-    }
-    if (parsed.skills.length > 12) {
-      parsed.skills = parsed.skills.slice(0, 12);
-    }
-
-    return parsed;
-  } catch (error) {
-    console.error('Failed to parse Gemini response:', responseText);
-    throw new Error(
-      `Failed to parse resume extraction response: ${error instanceof Error ? error.message : 'Invalid JSON'}`
-    );
-  }
+  // If all models failed, throw the last error with helpful message
+  throw new Error(
+    `All Gemini models failed. Last error: ${lastError?.message || 'Unknown error'}. ` +
+    `Please check your API key and ensure you have access to Gemini models.`
+  );
 }
 
 /**
@@ -183,11 +195,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Read file as buffer
+    // Read file as buffer and also get ArrayBuffer for base64 encoding
     let buffer: Buffer;
+    let arrayBuffer: ArrayBuffer;
     try {
-      const bytes = await file!.arrayBuffer();
-      buffer = Buffer.from(bytes);
+      arrayBuffer = await file!.arrayBuffer();
+      buffer = Buffer.from(arrayBuffer);
     } catch {
       return NextResponse.json(
         {
@@ -205,7 +218,7 @@ export async function POST(request: NextRequest) {
     let rawText: string = '';
     
     try {
-      extractionResult = await extractResumeDataWithGemini(file!, buffer);
+      extractionResult = await extractResumeDataWithGemini(file!, buffer, arrayBuffer);
       
       // Extract raw text for response (only needed for DOCX, PDF is processed directly)
       if (!isPdfFile(file!)) {

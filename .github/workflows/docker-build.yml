@@ -1,0 +1,60 @@
+name: Docker Build and Test
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: false
+        tags: coldstart:test
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Test Docker Compose configuration
+      run: |
+        docker-compose config
+
+    - name: Start services
+      run: |
+        # Create .env file for testing
+        echo "GEMINI_API_KEY=test_key_for_ci" > .env
+
+        # Start services in background
+        docker-compose up -d
+
+        # Wait for services to be healthy
+        sleep 30
+
+    - name: Check service health
+      run: |
+        # Check if web service is responding
+        curl --retry 5 --retry-delay 5 --retry-all-errors http://localhost:3000 || exit 1
+
+        # Check if Helix is responding
+        curl --retry 5 --retry-delay 5 --retry-all-errors http://localhost:6969/health || exit 1
+
+    - name: View logs on failure
+      if: failure()
+      run: |
+        docker-compose logs
+
+    - name: Cleanup
+      if: always()
+      run: |
+        docker-compose down -v

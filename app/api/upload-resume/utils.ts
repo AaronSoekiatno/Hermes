@@ -118,5 +118,11 @@ export interface ResumeProcessingResult {
   summary: string;
   embedding: number[];
   savedToDatabase: boolean;
+  matches: Array<{
+    startup: any;
+    score: number;
+    id: string;
+  }>;
   databaseError?: string;
+  matchingError?: string;
 }

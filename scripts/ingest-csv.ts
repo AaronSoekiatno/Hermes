@@ -1,13 +1,14 @@
 import { resolve } from 'path';
 import { config } from 'dotenv';
-// Load .env.local file
+// Load .env.local file FIRST before any other imports
 config({ path: resolve(process.cwd(), '.env.local') });
 
 import { parse } from 'csv-parse/sync';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { HelixDB } from 'helix-ts';
+import { upsertStartup } from '../lib/pinecone';
+import { saveStartup } from '../lib/supabase';
 
 // Types for CSV row data
 interface CSVRow {
@@ -83,12 +84,6 @@ function createTags(businessType: string, industry: string): string {
   return tags.join(', ');
 }
 
-/**
- * Generates a unique funding round ID
- */
-function generateFundingRoundId(startupName: string, dateRaised: string): string {
-  return `${startupName.toLowerCase().replace(/\s+/g, '-')}-${dateRaised.toLowerCase().replace(/\s+/g, '-')}`;
-}
 
 /**
  * Main ingestion function
@@ -116,94 +111,6 @@ async function ingestCSV() {
       } else {
         throw error;
       }
-    }
-  }
-
-  if (!process.env.HELIX_URL) {
-    console.warn('HELIX_URL not set, defaulting to http://localhost:6969');
-  }
-
-  // Initialize Helix client
-  const helixUrl = process.env.HELIX_URL || 'http://localhost:6969';
-  const helixApiKey = process.env.HELIX_API_KEY || null;
-  const client = new HelixDB(helixUrl, helixApiKey);
-
-  // Test HelixDB connectivity and check available queries
-  console.log(`Connecting to HelixDB at ${helixUrl}...`);
-  try {
-    const testResponse = await fetch(helixUrl);
-    console.log(`✓ HelixDB is accessible`);
-    
-    // Try to check if AddStartup query is available
-    console.log('Checking if queries are deployed...');
-    try {
-      const testQuery = await safeQuery('AddStartup', {
-        name: '__TEST__',
-        industry: '',
-        description: '',
-        funding_stage: '',
-        funding_amount: '',
-        location: '',
-        website: '',
-        tags: '',
-        embedding: [],
-      });
-      console.log('✓ Queries appear to be deployed\n');
-    } catch (queryTestError) {
-      const errorMsg = queryTestError instanceof Error ? queryTestError.message : String(queryTestError);
-      if (errorMsg.includes('404') || errorMsg.includes('Couldn\'t find')) {
-        console.warn('\n⚠️  WARNING: Queries are not deployed to HelixDB!');
-        console.warn('   The queries in db/queries.hx need to be loaded into HelixDB.');
-        console.warn('   This might require restarting HelixDB or deploying queries.');
-        console.warn('   Continuing anyway - queries may fail during ingestion.\n');
-      } else {
-        // If it's a different error (like validation), queries might be deployed
-        console.log('✓ Queries appear to be deployed (test query responded)\n');
-      }
-    }
-  } catch (error) {
-    throw new Error(
-      `Cannot connect to HelixDB at ${helixUrl}. ` +
-      `Make sure HelixDB is running. Error: ${error instanceof Error ? error.message : String(error)}`
-    );
-  }
-
-  // Wrapper function to handle HelixDB query errors better
-  async function safeQuery(queryName: string, params: any) {
-    try {
-      const response = await fetch(`${helixUrl}/${queryName}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(helixApiKey ? { 'x-api-key': helixApiKey } : {}),
-        },
-        body: JSON.stringify(params),
-      });
-
-      // Check if response is OK
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(
-          `HelixDB query "${queryName}" failed with status ${response.status}: ${errorText.substring(0, 200)}`
-        );
-      }
-
-      // Try to parse as JSON
-      const contentType = response.headers.get('content-type');
-      if (!contentType || !contentType.includes('application/json')) {
-        const text = await response.text();
-        throw new Error(
-          `HelixDB returned non-JSON response for query "${queryName}". ` +
-          `Content-Type: ${contentType}, Response: ${text.substring(0, 200)}`
-        );
-      }
-
-      return await response.json();
-    } catch (error) {
-      if (error instanceof Error && error.message.includes('HelixDB')) {
-        throw error;
-      }
-      throw new Error(`Failed to execute HelixDB query "${queryName}": ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -250,11 +157,38 @@ async function ingestCSV() {
         console.log('  Skipping embedding generation (no API key)...');
       }
 
-      // Create startup node (skip duplicate check since GetStartupByName query may not be deployed)
-      console.log('  Creating startup node...');
-      let startup;
+      // Create startup ID from company name
+      const startupId = row.Company_Name.toLowerCase().replace(/\s+/g, '-');
+
+      // Save startup to Pinecone (for vector search)
+      console.log('  Saving startup to Pinecone...');
       try {
-        const startupResult = await safeQuery('AddStartup', {
+        await upsertStartup(
+          startupId,
+          embedding,
+          {
+            name: row.Company_Name,
+            industry: row.industry || '',
+            description: description,
+            funding_stage: row.funding_stage || '',
+            funding_amount: row.amount_raised || '',
+            location: row.location || '',
+            website: row.website || '',
+            tags: tags,
+          }
+        );
+        console.log(`  ✓ Successfully saved ${row.Company_Name} to Pinecone`);
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        throw new Error(`Failed to save startup to Pinecone: ${errorMessage}`);
+      }
+
+      // Save startup to Supabase (for detailed queries)
+      console.log('  Saving startup to Supabase...');
+      try {
+        // Build startup data, only including founder fields if they have values
+        const startupData: any = {
+          id: startupId,
           name: row.Company_Name,
           industry: row.industry || '',
           description: description,
@@ -263,99 +197,37 @@ async function ingestCSV() {
           location: row.location || '',
           website: row.website || '',
           tags: tags,
-          embedding: embedding,
-        });
-        
-        if (!startupResult) {
-          throw new Error(`Failed to create startup node - no result returned. Response: ${JSON.stringify(startupResult)}`);
-        }
-        
-        startup = startupResult;
-      } catch (queryError) {
-        const errorMessage = queryError instanceof Error ? queryError.message : String(queryError);
-        // If it's a duplicate error, continue (HelixDB will handle it)
-        if (errorMessage.includes('already exists') || errorMessage.includes('duplicate') || errorMessage.includes('unique')) {
-          console.log('  Startup already exists, skipping...');
-          // Continue processing relationships - they might still work
-        } else {
-          throw new Error(`HelixDB query failed: ${errorMessage}`);
-        }
-      }
+        };
 
-      // Create founder node (if founder info exists and email is valid)
-      // Skip if startup creation failed
-      if (startup && row.founder_email && 
-          row.founder_email.trim() !== '' && 
-          row.founder_email !== 'hello@' && 
-          !row.founder_email.startsWith('hello@') &&
-          row.founder_first_name && 
-          row.founder_first_name.trim() !== '' &&
-          row.founder_last_name && 
-          row.founder_last_name.trim() !== '') {
-        console.log('  Creating founder node...');
-        
-        // Try to create founder (skip existence check since query may not be deployed)
-        try {
-          const founderResult = await safeQuery('AddFounder', {
-            email: row.founder_email,
-            first_name: row.founder_first_name,
-            last_name: row.founder_last_name,
-            linkedin: row.founder_linkedin || '',
-          });
-          
-          // Connect startup to founder
-          if (founderResult) {
-            console.log('  Connecting startup to founder...');
-            await safeQuery('ConnectStartupToFounder', {
-              startup_name: row.Company_Name,
-              founder_email: row.founder_email,
-            });
-          }
-        } catch (error) {
-          const errorMessage = error instanceof Error ? error.message : String(error);
-          // If query doesn't exist (404), warn but continue
-          if (errorMessage.includes('404') || errorMessage.includes('Couldn\'t find')) {
-            console.warn(`  Skipping founder (query not deployed): ${errorMessage.substring(0, 100)}`);
-          } else {
-            console.error(`  Error processing founder: ${errorMessage}`);
-          }
-          // Continue even if founder creation fails
+        // Only include optional fields if they have values (skip if empty to avoid column errors)
+        if (row.founder_first_name?.trim()) {
+          startupData.founder_first_name = row.founder_first_name;
         }
-      }
+        if (row.founder_last_name?.trim()) {
+          startupData.founder_last_name = row.founder_last_name;
+        }
+        if (row.founder_email?.trim()) {
+          startupData.founder_emails = row.founder_email;
+        }
+        if (row.founder_linkedin?.trim()) {
+          startupData.founder_linkedin = row.founder_linkedin;
+        }
+        if (row.Batch?.trim()) {
+          startupData.batch = row.Batch;
+        }
+        if (row.job_openings?.trim()) {
+          startupData.job_openings = row.job_openings;
+        }
+        if (row.date_raised?.trim()) {
+          startupData.date_raised = row.date_raised;
+        }
 
-      // Create funding round node (only if startup was created successfully)
-      if (startup && row.funding_stage && row.date_raised) {
-        console.log('  Creating funding round node...');
-        
-        const fundingRoundId = generateFundingRoundId(row.Company_Name, row.date_raised);
-        
-        try {
-          const fundingRoundResult = await safeQuery('AddFundingRound', {
-            round_id: fundingRoundId,
-            stage: row.funding_stage,
-            amount: row.amount_raised || '',
-            date_raised: row.date_raised,
-            batch: row.Batch || '',
-          });
-          
-          // Connect startup to funding round
-          if (fundingRoundResult) {
-            console.log('  Connecting startup to funding round...');
-            await safeQuery('ConnectStartupToFundingRound', {
-              startup_name: row.Company_Name,
-              funding_round_id: fundingRoundId,
-            });
-          }
-        } catch (error) {
-          const errorMessage = error instanceof Error ? error.message : String(error);
-          // If query doesn't exist (404), warn but continue
-          if (errorMessage.includes('404') || errorMessage.includes('Couldn\'t find')) {
-            console.warn(`  Skipping funding round (query not deployed): ${errorMessage.substring(0, 100)}`);
-          } else {
-            console.error(`  Error processing funding round: ${errorMessage}`);
-          }
-          // Continue even if funding round creation fails
-        }
+        await saveStartup(startupData);
+        console.log(`  ✓ Successfully saved ${row.Company_Name} to Supabase`);
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.warn(`  ⚠️  Failed to save startup to Supabase: ${errorMessage}`);
+        // Continue even if Supabase save fails
       }
 
       successCount++;

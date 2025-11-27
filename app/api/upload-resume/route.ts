@@ -232,6 +232,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    if (!user.email_confirmed_at) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Please verify your email address before uploading.',
+        },
+        { status: 403 }
+      );
+    }
+
     const accountEmail = user.email;
     const accountName =
       (user.user_metadata?.full_name as string | undefined) ?? undefined;

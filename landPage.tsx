@@ -15,6 +15,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import type { User } from "@supabase/supabase-js";
+import { supabase } from "@/lib/supabase";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 const SAMPLE_MATCHED_STARTUPS = [
   "Anthropic",
@@ -34,11 +42,26 @@ export const Hero = () => {
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [matchedStartups, setMatchedStartups] = useState<string[]>([]);
+  const [user, setUser] = useState<User | null>(null);
   const { toast } = useToast();
   const progressIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
+    const getUser = async () => {
+      const { data } = await supabase.auth.getUser();
+      setUser(data.user ?? null);
+    };
+    getUser();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+    });
+
     return () => {
+      subscription.unsubscribe();
       if (progressIntervalRef.current) {
         clearInterval(progressIntervalRef.current);
       }
@@ -101,6 +124,10 @@ export const Hero = () => {
           title: "Resume processed",
           description: "We found a few startups that look like a great fit.",
         });
+        setFile(null);
+        if (fileInputRef.current) {
+          fileInputRef.current.value = "";
+        }
       }, 500);
     } catch (error) {
       stopProgressSimulation();
@@ -122,6 +149,14 @@ export const Hero = () => {
     const selectedFile = e.target.files?.[0];
     if (selectedFile) {
       if (selectedFile.type === 'application/pdf' || selectedFile.name.endsWith('.pdf')) {
+        if (!user) {
+          toast({
+            title: "Please sign in",
+            description: "Sign in to upload your resume and get matched with startups.",
+          });
+          setIsSignInModalOpen(true);
+          return;
+        }
         setFile(selectedFile);
         void uploadResume(selectedFile);
       } else {
@@ -138,15 +173,46 @@ export const Hero = () => {
     <div className="min-h-screen bg-gradient-to-br from-black via-gray-900 to-gray-800">
       <section className="relative min-h-screen flex items-center justify-center overflow-hidden">
 
-        {/* Sign In Button */}
+        {/* Sign In Button / Account Indicator */}
         <div className="absolute top-8 right-8 z-20">
-          <Button 
-            variant="outline" 
-            onClick={() => setIsSignInModalOpen(true)}
-            className="backdrop-blur-3xl bg-background/40 hover:bg-background/60 transition-all hover:-translate-y-1 duration-300 border-white/30 rounded-2xl text-white hover:text-white"
-          >
-            Sign In
-          </Button>
+          {user ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button className="flex items-center gap-3 rounded-2xl border border-white/30 bg-white/10 px-4 py-2 text-white transition hover:border-white/50 focus:outline-none focus:ring-2 focus:ring-white/40">
+                  <div className="h-9 w-9 rounded-full bg-white/20 flex items-center justify-center font-semibold">
+                    {user.email?.[0]?.toUpperCase() ?? "U"}
+                  </div>
+                  <div className="text-left">
+                    <p className="text-sm font-semibold">{user.email}</p>
+                    <p className="text-xs text-white/60">Signed in</p>
+                  </div>
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="border-white/30 bg-white/10 text-white px-0 py-0 rounded-2xl overflow-hidden min-w-[250px]">
+                <DropdownMenuItem
+                  className="cursor-pointer text-white w-full px-4 py-2 text-center hover:bg-white/20 focus:bg-white/20"
+                  onSelect={async () => {
+                    await supabase.auth.signOut();
+                    setUser(null);
+                    toast({
+                      title: "Signed out",
+                      description: "You have been signed out successfully.",
+                    });
+                  }}
+                >
+                  Sign out
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : (
+            <Button 
+              variant="outline" 
+              onClick={() => setIsSignInModalOpen(true)}
+              className="backdrop-blur-3xl bg-background/40 hover:bg-background/60 transition-all hover:-translate-y-1 duration-300 border-white/30 rounded-2xl text-white hover:text-white"
+            >
+              Sign In
+            </Button>
+          )}
         </div>
 
         {/* Sign In Modal */}
@@ -180,6 +246,7 @@ export const Hero = () => {
                     accept=".pdf"
                     onChange={handleFileChange}
                     className="hidden"
+                    ref={fileInputRef}
                   />
                   <label
                     htmlFor="resume"
@@ -187,7 +254,7 @@ export const Hero = () => {
                   >
                     {file ? (
                       <>
-                        <FileText className="h-12 w-12 text-primary transition-transform group-hover:scale-110 duration-300" />
+                        <FileText className="h-12 w-12 text-white transition-transform group-hover:scale-110 duration-300" />
                         <span className="text-xl font-semibold text-white">{file.name}</span>
                       </>
                     ) : (

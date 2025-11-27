@@ -9,7 +9,8 @@ import {
   type ResumeExtractionResult,
   type ResumeProcessingResult,
 } from './utils';
-import { addCandidate } from '@/lib/helix';
+import { upsertCandidate, findMatchingStartups } from '@/lib/pinecone';
+import { saveCandidate, saveMatches } from '@/lib/supabase';
 
 export const runtime = 'nodejs';
 
@@ -339,26 +340,28 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Save candidate to HelixDB
+    // Save candidate to Pinecone (for vector search)
     let savedToDatabase = false;
     let databaseError: string | undefined;
     try {
-      const dbResult = await addCandidate({
-        name: extractionResult.name,
-        email: extractionResult.email,
-        summary: extractionResult.summary,
-        skills: extractionResult.skills.join(', '),
+      await upsertCandidate(
+        extractionResult.email, // Use email as unique ID
         embedding,
-      });
+        {
+          name: extractionResult.name,
+          email: extractionResult.email,
+          summary: extractionResult.summary,
+          skills: extractionResult.skills.join(', '),
+        }
+      );
       savedToDatabase = true;
-      console.log('Successfully saved candidate to HelixDB:', {
+      console.log('Successfully saved candidate to Pinecone:', {
         name: extractionResult.name,
         email: extractionResult.email,
-        dbResult,
       });
     } catch (error) {
       databaseError = error instanceof Error ? error.message : 'Unknown database error';
-      console.error('Failed to save candidate to HelixDB:', {
+      console.error('Failed to save candidate to Pinecone:', {
         error: databaseError,
         candidate: {
           name: extractionResult.name,
@@ -367,6 +370,63 @@ export async function POST(request: NextRequest) {
         fullError: error,
       });
       // Continue even if DB save fails - we still want to return the extracted data
+    }
+
+    // Save candidate to Supabase (for detailed queries)
+    try {
+      await saveCandidate({
+        email: extractionResult.email,
+        name: extractionResult.name,
+        summary: extractionResult.summary,
+        skills: extractionResult.skills.join(', '),
+      });
+      console.log('Successfully saved candidate to Supabase:', {
+        name: extractionResult.name,
+        email: extractionResult.email,
+      });
+    } catch (error) {
+      console.error('Failed to save candidate to Supabase:', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        candidate: {
+          name: extractionResult.name,
+          email: extractionResult.email,
+        },
+      });
+      // Continue even if Supabase save fails
+    }
+
+    // Find matching startups
+    let matches: Array<{ id: string; score: number; metadata: any }> = [];
+    let matchingError: string | undefined;
+    try {
+      matches = await findMatchingStartups(embedding, 10);
+      console.log(`Found ${matches.length} matching startups for candidate`);
+      
+      // Save matches to Supabase
+      if (matches.length > 0) {
+        try {
+          await saveMatches(
+            extractionResult.email,
+            matches.map((match) => ({
+              startup_id: match.id,
+              score: match.score,
+            }))
+          );
+          console.log(`Successfully saved ${matches.length} matches to Supabase`);
+        } catch (error) {
+          console.error('Failed to save matches to Supabase:', {
+            error: error instanceof Error ? error.message : 'Unknown error',
+          });
+          // Continue even if Supabase save fails
+        }
+      }
+    } catch (error) {
+      matchingError = error instanceof Error ? error.message : 'Unknown matching error';
+      console.error('Failed to find matching startups:', {
+        error: matchingError,
+        fullError: error,
+      });
+      // Continue even if matching fails
     }
 
     // Build the successful response
@@ -379,7 +439,13 @@ export async function POST(request: NextRequest) {
       summary: extractionResult.summary,
       embedding,
       savedToDatabase,
+      matches: matches.map((match) => ({
+        startup: match.metadata,
+        score: match.score,
+        id: match.id,
+      })),
       ...(databaseError && { databaseError }),
+      ...(matchingError && { matchingError }),
     };
 
     return NextResponse.json(result, { status: 200 });

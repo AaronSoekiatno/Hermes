@@ -39,6 +39,7 @@ export const Hero = () => {
   const [user, setUser] = useState<User | null>(null);
   const { toast } = useToast();
   const progressIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     const getUser = async () => {
@@ -117,6 +118,10 @@ export const Hero = () => {
           title: "Resume processed",
           description: "We found a few startups that look like a great fit.",
         });
+        setFile(null);
+        if (fileInputRef.current) {
+          fileInputRef.current.value = "";
+        }
       }, 500);
     } catch (error) {
       stopProgressSimulation();
@@ -216,6 +221,7 @@ export const Hero = () => {
                     accept=".pdf"
                     onChange={handleFileChange}
                     className="hidden"
+                    ref={fileInputRef}
                   />
                   <label
                     htmlFor="resume"

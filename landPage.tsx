@@ -15,6 +15,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import type { User } from "@supabase/supabase-js";
+import { supabase } from "@/lib/supabase";
 
 const SAMPLE_MATCHED_STARTUPS = [
   "Anthropic",
@@ -34,11 +36,25 @@ export const Hero = () => {
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [matchedStartups, setMatchedStartups] = useState<string[]>([]);
+  const [user, setUser] = useState<User | null>(null);
   const { toast } = useToast();
   const progressIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
+    const getUser = async () => {
+      const { data } = await supabase.auth.getUser();
+      setUser(data.user ?? null);
+    };
+    getUser();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+    });
+
     return () => {
+      subscription.unsubscribe();
       if (progressIntervalRef.current) {
         clearInterval(progressIntervalRef.current);
       }
@@ -122,6 +138,14 @@ export const Hero = () => {
     const selectedFile = e.target.files?.[0];
     if (selectedFile) {
       if (selectedFile.type === 'application/pdf' || selectedFile.name.endsWith('.pdf')) {
+        if (!user) {
+          toast({
+            title: "Please sign in",
+            description: "Sign in to upload your resume and get matched with startups.",
+          });
+          setIsSignInModalOpen(true);
+          return;
+        }
         setFile(selectedFile);
         void uploadResume(selectedFile);
       } else {
@@ -138,15 +162,27 @@ export const Hero = () => {
     <div className="min-h-screen bg-gradient-to-br from-black via-gray-900 to-gray-800">
       <section className="relative min-h-screen flex items-center justify-center overflow-hidden">
 
-        {/* Sign In Button */}
+        {/* Sign In Button / Account Indicator */}
         <div className="absolute top-8 right-8 z-20">
-          <Button 
-            variant="outline" 
-            onClick={() => setIsSignInModalOpen(true)}
-            className="backdrop-blur-3xl bg-background/40 hover:bg-background/60 transition-all hover:-translate-y-1 duration-300 border-white/30 rounded-2xl text-white hover:text-white"
-          >
-            Sign In
-          </Button>
+          {user ? (
+            <div className="flex items-center gap-3 rounded-2xl border border-white/30 bg-white/10 px-4 py-2 text-white">
+              <div className="h-9 w-9 rounded-full bg-white/20 flex items-center justify-center font-semibold">
+                {user.email?.[0]?.toUpperCase() ?? "U"}
+              </div>
+              <div className="text-sm">
+                <p className="font-semibold">{user.email}</p>
+                <p className="text-xs text-white/60">Signed in</p>
+              </div>
+            </div>
+          ) : (
+            <Button 
+              variant="outline" 
+              onClick={() => setIsSignInModalOpen(true)}
+              className="backdrop-blur-3xl bg-background/40 hover:bg-background/60 transition-all hover:-translate-y-1 duration-300 border-white/30 rounded-2xl text-white hover:text-white"
+            >
+              Sign In
+            </Button>
+          )}
         </div>
 
         {/* Sign In Modal */}

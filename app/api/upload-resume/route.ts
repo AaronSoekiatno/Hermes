@@ -11,6 +11,7 @@ import {
 } from './utils';
 import { upsertCandidate, findMatchingStartups } from '@/lib/pinecone';
 import { saveCandidate, saveMatches } from '@/lib/supabase';
+import { createServerClient } from '@supabase/ssr';
 
 export const runtime = 'nodejs';
 
@@ -201,6 +202,40 @@ async function generateEmbedding(
 
 export async function POST(request: NextRequest) {
   try {
+    const supabase = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          getAll() {
+            return request.cookies.getAll();
+          },
+          setAll() {
+            // No-op for route handler (we only need read access)
+          },
+        },
+      }
+    );
+
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
+
+    if (authError || !user || !user.email) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Please sign in to upload your resume.',
+        },
+        { status: 401 }
+      );
+    }
+
+    const accountEmail = user.email;
+    const accountName =
+      (user.user_metadata?.full_name as string | undefined) ?? undefined;
+
     // Check for API key
     const apiKey = process.env.GEMINI_API_KEY;
     console.log('GEMINI_API_KEY exists:', !!apiKey);
@@ -345,11 +380,11 @@ export async function POST(request: NextRequest) {
     let databaseError: string | undefined;
     try {
       await upsertCandidate(
-        extractionResult.email, // Use email as unique ID
+        accountEmail,
         embedding,
         {
-          name: extractionResult.name,
-          email: extractionResult.email,
+          name: accountName ?? extractionResult.name,
+          email: accountEmail,
           summary: extractionResult.summary,
           skills: extractionResult.skills.join(', '),
         }
@@ -375,8 +410,8 @@ export async function POST(request: NextRequest) {
     // Save candidate to Supabase (for detailed queries)
     try {
       await saveCandidate({
-        email: extractionResult.email,
-        name: extractionResult.name,
+        email: accountEmail,
+        name: accountName ?? extractionResult.name,
         summary: extractionResult.summary,
         skills: extractionResult.skills.join(', '),
       });

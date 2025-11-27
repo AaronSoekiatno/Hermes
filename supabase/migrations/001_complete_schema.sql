@@ -8,6 +8,7 @@
     name TEXT NOT NULL,
     summary TEXT,
     skills TEXT,
+    resume_storage_path TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
   );
 

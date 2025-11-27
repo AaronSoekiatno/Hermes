@@ -119,6 +119,7 @@ export default function ResumeUpload() {
       const response = await fetch('/api/upload-resume', {
         method: 'POST',
         body: formData,
+        credentials: 'include',
       });
 
       if (!response.ok) {

@@ -22,16 +22,13 @@ interface TechCrunchArticle {
 
 interface StartupData {
   Company_Name: string;
-  company_description: string;
-  business_type: string;
-  industry: string;
-  location: string;
-  website: string;
+  company_description: string; // From TechCrunch article content only
   funding_stage: string | null; // Can be null if not found
   amount_raised: string | null; // Can be null if not found - no guessing
   date_raised: string | null; // Can be null if not found - no guessing
   techcrunch_article_link?: string;
   techcrunch_article_content?: string;
+  // All other fields (website, location, industry, business_type, etc.) will be enriched by web_search_agent.ts
 }
 
 /**
@@ -138,6 +135,52 @@ async function storeEmbeddingInPinecone(id: string, embedding: number[], metadat
   } catch (error) {
     console.warn(`Failed to store embedding in Pinecone: ${error instanceof Error ? error.message : String(error)}`);
   }
+}
+
+/**
+ * Generate embedding text with enrichment data
+ * This function can be used to regenerate embeddings after web search enrichment
+ */
+export function generateEmbeddingText(
+  description: string,
+  companyName: string,
+  fundingStage: string | null,
+  fundingAmount: string | null,
+  location: string | null,
+  industry: string | null,
+  businessType: string | null,
+  enrichmentData?: {
+    tech_stack?: string | null;
+    target_customer?: string | null;
+    market_vertical?: string | null;
+    team_size?: string | null;
+    founder_backgrounds?: string | null;
+    website_keywords?: string | null;
+    hiring_roles?: string | null;
+  }
+): string {
+  const tags = businessType && industry 
+    ? `${businessType}, ${industry}` 
+    : businessType || industry || '';
+  
+  const embeddingParts = [
+    description,
+    companyName ? `Company: ${companyName}` : '',
+    fundingStage ? `Funding Stage: ${fundingStage}` : '',
+    fundingAmount ? `Funding Amount: ${fundingAmount}` : '',
+    location ? `Location: ${location}` : '',
+    tags ? `Tags: ${tags}` : '',
+    // Enrichment fields
+    enrichmentData?.tech_stack ? `Tech Stack: ${enrichmentData.tech_stack}` : '',
+    enrichmentData?.target_customer ? `Target Customer: ${enrichmentData.target_customer}` : '',
+    enrichmentData?.market_vertical ? `Market Vertical: ${enrichmentData.market_vertical}` : '',
+    enrichmentData?.team_size ? `Team Size: ${enrichmentData.team_size}` : '',
+    enrichmentData?.founder_backgrounds ? `Founder Backgrounds: ${enrichmentData.founder_backgrounds}` : '',
+    enrichmentData?.website_keywords ? `Website Keywords: ${enrichmentData.website_keywords}` : '',
+    enrichmentData?.hiring_roles ? `Hiring Roles: ${enrichmentData.hiring_roles}` : '',
+  ].filter(Boolean);
+  
+  return embeddingParts.join('\n');
 }
 
 /**
@@ -326,7 +369,9 @@ function extractDate(article: TechCrunchArticle): string | null {
 }
 
 /**
- * Extract location
+ * Extract location - ONLY if explicitly found in text
+ * Returns empty string if not found - NO GUESSING OR HALLUCINATION
+ * @deprecated No longer used - location enriched via web search agent
  */
 function extractLocation(text: string): string {
   const locations = [
@@ -351,10 +396,12 @@ function extractLocation(text: string): string {
     }
   }
 
+  // Only extract city-state pattern if explicitly found - return exactly as found, no assumptions
   const cityStatePattern = /([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?),\s*([A-Z]{2})/;
   const match = text.match(cityStatePattern);
   if (match) {
-    return `${match[1]}, ${match[2]}, USA`;
+    // Return exactly what was found - don't assume country
+    return `${match[1]}, ${match[2]}`;
   }
 
   return '';
@@ -362,6 +409,7 @@ function extractLocation(text: string): string {
 
 /**
  * Extract industry
+ * @deprecated No longer used - industry enriched via web search agent
  */
 function extractIndustry(text: string): string {
   const textLower = text.toLowerCase();
@@ -407,6 +455,7 @@ function extractIndustry(text: string): string {
 
 /**
  * Extract business type - only if explicitly mentioned
+ * @deprecated No longer used - business type enriched via web search agent
  */
 function extractBusinessType(text: string): string {
   const textLower = text.toLowerCase();
@@ -425,7 +474,9 @@ function extractBusinessType(text: string): string {
 }
 
 /**
- * Extract website
+ * Extract website - ONLY if explicitly found in text
+ * Returns empty string if not found - NO GUESSING OR HALLUCINATION
+ * @deprecated No longer used - website enriched via web search agent
  */
 function extractWebsite(companyName: string, text: string): string {
   const urlPattern = /(?:https?:\/\/)?(?:www\.)?([a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+)/g;
@@ -433,17 +484,14 @@ function extractWebsite(companyName: string, text: string): string {
   
   for (const match of matches) {
     const domain = match[1];
+    // Only return if it's not a known social/media site
     if (!['techcrunch.com', 'twitter.com', 'linkedin.com', 'facebook.com', 'youtube.com'].includes(domain)) {
       return domain;
     }
   }
 
-  const domain = companyName
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, '')
-    .replace(/\s+/g, '');
-  
-  return `${domain}.com`;
+  // NO GUESSING - return empty string if website not explicitly found
+  return '';
 }
 
 /**
@@ -463,22 +511,18 @@ Link: ${article.link || ''}
 Date: ${article.date || ''}
 `.trim();
 
-    const prompt = `Extract structured startup funding information from this TechCrunch article. Return ONLY valid JSON, no markdown, no explanation.
+    const prompt = `Extract ONLY funding-related information from this TechCrunch article. Return ONLY valid JSON, no markdown, no explanation.
 
-IMPORTANT: Only extract information that is explicitly stated in the article. Do NOT guess, infer, or use defaults. If information is not mentioned, use null or empty string.
+CRITICAL: Extract ONLY what is explicitly stated in the article about funding. Do NOT extract website, location, industry, or business type - these will be enriched later via web search.
 
 Article:
 ${articleText}
 
-Extract the following information:
+Extract ONLY the following information:
 - Company_Name: The name of the startup/company (required, must be exact from article)
 - funding_stage: Only if explicitly stated: Seed, Series A, Series B, Series C, Series D, Bridge, IPO. Use null if not mentioned.
 - amount_raised: Funding amount ONLY if explicitly stated in format like "$5M", "$10.5M", "$2.5B". Use null if not mentioned.
 - date_raised: Date of funding announcement ONLY if explicitly stated (format: "Month Year" or "YYYY-MM-DD"). Use null if not mentioned.
-- location: City, State/Country ONLY if explicitly stated (e.g., "San Francisco, CA" or "London, UK"). Use empty string if not mentioned.
-- industry: Primary industry ONLY if explicitly stated (e.g., "Artificial Intelligence", "Fintech", "Healthcare", "SaaS"). Use empty string if not mentioned.
-- business_type: ONLY if explicitly stated: "B2B", "Consumer", "Marketplace", "Platform". Use empty string if not mentioned.
-- website: Company website domain ONLY if explicitly stated (without http://). Use empty string if not mentioned.
 - company_description: First 2-3 sentences summarizing what the company does ONLY from the article content (max 500 chars). Use empty string if no description available.
 
 Return JSON in this exact format:
@@ -487,10 +531,6 @@ Return JSON in this exact format:
   "funding_stage": "string or null",
   "amount_raised": "string or null",
   "date_raised": "string or null",
-  "location": "string",
-  "industry": "string",
-  "business_type": "string",
-  "website": "string",
   "company_description": "string"
 }
 
@@ -560,10 +600,6 @@ If no company name can be identified, return null.`;
     return {
       Company_Name: extracted.Company_Name,
       company_description: toEmptyString(extracted.company_description), // Only use what was extracted
-      business_type: toEmptyString(extracted.business_type), // No default
-      industry: toEmptyString(extracted.industry),
-      location: toEmptyString(extracted.location),
-      website: toEmptyString(extracted.website), // No guessing website
       funding_stage: toNull(extracted.funding_stage), // No default to 'Seed'
       amount_raised: toNull(extracted.amount_raised), // No default to '$1.5M'
       date_raised: toNull(extracted.date_raised), // No fallback date
@@ -578,6 +614,7 @@ If no company name can be identified, return null.`;
 
 /**
  * Parse article to startup data using regex (fallback)
+ * ONLY extracts funding-related data - all other fields enriched via web search
  */
 function parseArticleToStartupRegex(article: TechCrunchArticle): StartupData | null {
   const companyName = extractCompanyName(article);
@@ -589,10 +626,6 @@ function parseArticleToStartupRegex(article: TechCrunchArticle): StartupData | n
   const fundingAmount = extractFundingAmount(content);
   const fundingStage = extractFundingStage(content);
   const dateRaised = extractDate(article);
-  const location = extractLocation(content);
-  const industry = extractIndustry(content);
-  const businessType = extractBusinessType(content);
-  const website = extractWebsite(companyName, content);
 
   // Only use article content if it exists - don't create fake descriptions
   // For embeddings, we'll use the full article content stored in techcrunch_article_content
@@ -601,10 +634,6 @@ function parseArticleToStartupRegex(article: TechCrunchArticle): StartupData | n
   return {
     Company_Name: companyName,
     company_description: description, // Only real article content, no guessing
-    business_type: businessType, // May be empty string if not found
-    industry: industry,
-    location: location,
-    website: website,
     funding_stage: fundingStage, // May be null if not found
     amount_raised: fundingAmount, // May be null if not found - NO DEFAULT
     date_raised: dateRaised, // May be null if not found - NO DEFAULT
@@ -1031,18 +1060,17 @@ function getTimeInfo(): string {
  * Main scraping and ingestion function
  * Focus: Funding-related articles only
  * 
- * NOTE: Designed to run every 30 minutes during TechCrunch's active hours (6 AM - 10 PM Pacific).
+ * NOTE: Designed to run hourly during TechCrunch's active hours (6 AM - 10 PM Pacific).
  * See SCRAPER_LIMITATIONS_10MIN.md for limitations.
  */
 async function scrapeAndIngestTechCrunch() {
   // Check if within TechCrunch's active hours
-  // COMMENTED OUT FOR TESTING - Remove comments to re-enable active hours check
-  // if (!isWithinTechCrunchHours()) {
-  //   const timeInfo = getTimeInfo();
-  //   console.log(`⏸️  Outside TechCrunch publishing hours. ${timeInfo}`);
-  //   console.log('   Skipping this run. Will resume during active hours (6 AM - 10 PM Pacific).\n');
-  //   return;
-  // }
+  if (!isWithinTechCrunchHours()) {
+    const timeInfo = getTimeInfo();
+    console.log(`⏸️  Outside TechCrunch publishing hours. ${timeInfo}`);
+    console.log('   Skipping this run. Will resume during active hours (6 AM - 10 PM Pacific).\n');
+    return;
+  }
   
   // Prevent overlapping runs
   if (isScraping) {
@@ -1053,9 +1081,9 @@ async function scrapeAndIngestTechCrunch() {
   const startTime = Date.now();
   const timeSinceLastRun = startTime - lastRunTime;
   
-  // Minimum interval: 25 minutes (for 30-minute schedule with buffer)
-  if (lastRunTime > 0 && timeSinceLastRun < 25 * 60 * 1000) {
-    console.log(`⚠️  Last run was ${Math.round(timeSinceLastRun / 60000)} minutes ago. Minimum interval: 25 minutes. Skipping...`);
+  // Minimum interval: 55 minutes (for hourly schedule with buffer)
+  if (lastRunTime > 0 && timeSinceLastRun < 55 * 60 * 1000) {
+    console.log(`⚠️  Last run was ${Math.round(timeSinceLastRun / 60000)} minutes ago. Minimum interval: 55 minutes. Skipping...`);
     return;
   }
   
@@ -1299,21 +1327,20 @@ async function scrapeAndIngestTechCrunch() {
 
       // Generate embedding - include all relevant data for better matching
       const description = startup.company_description || '';
-      const tags = startup.business_type && startup.industry 
-        ? `${startup.business_type}, ${startup.industry}` 
-        : startup.business_type || startup.industry || '';
       
-      // Include more context in embedding for better semantic search
-      const embeddingParts = [
+      // Generate embedding text (enrichment data will be added after web search)
+      // For now, only use funding data and description from TechCrunch article
+      const embeddingText = generateEmbeddingText(
         description,
-        startup.Company_Name ? `Company: ${startup.Company_Name}` : '',
-        startup.funding_stage ? `Funding Stage: ${startup.funding_stage}` : '',
-        startup.amount_raised ? `Funding Amount: ${startup.amount_raised}` : '',
-        startup.location ? `Location: ${startup.location}` : '',
-        tags ? `Tags: ${tags}` : '',
-      ].filter(Boolean);
-      
-      const embeddingText = embeddingParts.join('\n');
+        startup.Company_Name,
+        startup.funding_stage,
+        startup.amount_raised,
+        null, // location - will be enriched via web search
+        null, // industry - will be enriched via web search
+        null, // business_type - will be enriched via web search
+        // No enrichment data yet - will be added after web search enrichment
+        undefined
+      );
 
       console.log('  Generating embedding...');
       const embedding = await generateEmbedding(embeddingText);
@@ -1333,47 +1360,47 @@ async function scrapeAndIngestTechCrunch() {
       }
       const pineconeId = `startup-${startup.Company_Name.toLowerCase().replace(/\s+/g, '-')}-${Date.now()}`;
       
-      // Combine business_type and industry into keywords
-      const keywords = [startup.business_type, startup.industry].filter(Boolean).join(', ');
-      
-      // For TechCrunch scraping, we don't have founder info, so leave empty
-      // These can be populated later from other sources
-      const founderNames = '';
-      const founderEmails = '';
-      const founderLinkedin = '';
-      const jobOpenings = ''; // Can be populated from other sources
-      
       // Generate UUID explicitly to ensure id is set (fixes null constraint violation)
       const startupId = randomUUID();
-      
+
       // Helper to convert empty strings to null (PostgreSQL prefers null for optional fields)
       const toNull = (value: string | null | undefined): string | null => {
         return value && value.trim() ? value : null;
       };
-      
+
       const { data: startupData, error: startupError } = await supabase
         .from('startups')
         .insert({
           id: startupId, // Explicitly set UUID to avoid null constraint violation
           name: startup.Company_Name,
+          // ONLY funding-related fields from TechCrunch
           funding_amount: toNull(startup.amount_raised),
-          job_openings: toNull(jobOpenings),
           round_type: toNull(startup.funding_stage),
           date: toNull(startup.date_raised),
-          location: toNull(startup.location),
-          website: toNull(startup.website),
-          founder_linkedin: toNull(founderLinkedin),
-          industry: toNull(startup.industry),
-          founder_names: toNull(founderNames),
-          founder_emails: toNull(founderEmails),
-          keywords: toNull(keywords),
-          description: description || null, // Keep for embeddings, but allow null if empty
-          pinecone_id: pineconeId,
+          description: description || null, // Article description only
           techcrunch_article_link: toNull(startup.techcrunch_article_link),
           techcrunch_article_content: toNull(startup.techcrunch_article_content),
+          pinecone_id: pineconeId,
           data_source: 'techcrunch',
-          needs_enrichment: true, // Mark for web search enrichment
+          // All other fields left as null - will be enriched by web_search_agent.ts
+          location: null,
+          website: null,
+          industry: null,
+          keywords: null,
+          founder_names: null,
+          founder_emails: null,
+          founder_linkedin: null,
+          job_openings: null,
+          // Mark for enrichment
+          needs_enrichment: true,
           enrichment_status: 'pending',
+          // Enrichment fields (will be populated by web_search_agent.ts)
+          tech_stack: null,
+          target_customer: null,
+          market_vertical: null,
+          team_size: null,
+          founder_backgrounds: null,
+          website_keywords: null,
         })
         .select()
         .single();
@@ -1398,14 +1425,22 @@ async function scrapeAndIngestTechCrunch() {
         try {
           await storeEmbeddingInPinecone(pineconeId, embedding, {
             name: startup.Company_Name,
-            industry: startup.industry || '',
             description: description,
-            keywords: keywords,
-            business_type: startup.business_type || '',
-            location: startup.location || '',
             funding_stage: startup.funding_stage || '',
             funding_amount: startup.amount_raised || '',
-            website: startup.website || '',
+            // All other fields will be enriched later - store empty for now
+            industry: '',
+            keywords: '',
+            business_type: '',
+            location: '',
+            website: '',
+            tech_stack: '',
+            target_customer: '',
+            market_vertical: '',
+            team_size: '',
+            founder_backgrounds: '',
+            website_keywords: '',
+            hiring_roles: '',
           });
           console.log('  ✓ Embedding stored in Pinecone');
         } catch (pineconeError) {

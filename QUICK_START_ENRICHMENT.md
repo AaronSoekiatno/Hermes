@@ -15,23 +15,16 @@ This system scrapes TechCrunch articles, extracts startup data, saves to Supabas
 
 The migration file is at: `supabase/migrations/005_add_techcrunch_columns.sql`
 
-### 2. Set Up Web Search API (Choose One)
+### 2. Set Up Web Search
 
-**Option A: Google Custom Search API**
+The system uses **Gemini Grounding with Google Search** (uses your existing `GEMINI_API_KEY`) and falls back to **DuckDuckGo** (free, no API key needed).
+
+**Required:**
 ```env
-GOOGLE_SEARCH_API_KEY=your_key_here
-GOOGLE_SEARCH_ENGINE_ID=your_engine_id_here
+GEMINI_API_KEY=your_gemini_key_here
 ```
 
-**Option B: SerpAPI**
-```env
-SERPAPI_KEY=your_key_here
-```
-
-**Option C: Bing Search API**
-```env
-BING_SEARCH_API_KEY=your_key_here
-```
+That's it! The system will automatically use Gemini for search and extraction. DuckDuckGo is used as a free fallback if needed.
 
 ### 3. Ensure Supabase Credentials
 
@@ -138,9 +131,9 @@ WHERE data_source = 'techcrunch';
 
 ### No Search Results
 
-- Check your API keys are set correctly
-- Verify API quotas/limits
-- Check API status
+- Check `GEMINI_API_KEY` is set correctly
+- Verify Gemini API quota/limits
+- System will automatically fall back to DuckDuckGo if needed
 
 ### Enrichment Failing
 

@@ -92,25 +92,14 @@ The enrichment agent:
 
 ### 4. **Web Search Implementation** (`web_search_agent.ts`)
 
-The web search agent supports multiple APIs:
+The web search agent uses **Gemini Grounding with Google Search** (via `GEMINI_API_KEY`) and falls back to **DuckDuckGo** (free, no API key needed).
 
-**Option 1: Google Custom Search API**
+**Required:**
 ```env
-GOOGLE_SEARCH_API_KEY=your_key
-GOOGLE_SEARCH_ENGINE_ID=your_engine_id
+GEMINI_API_KEY=your_gemini_key
 ```
 
-**Option 2: SerpAPI**
-```env
-SERPAPI_KEY=your_key
-```
-
-**Option 3: Bing Search API**
-```env
-BING_SEARCH_API_KEY=your_key
-```
-
-The agent tries APIs in order and uses the first available one.
+The agent automatically uses Gemini for search and extraction. DuckDuckGo is used as a free fallback.
 
 ## Usage
 

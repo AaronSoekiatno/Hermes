@@ -19,7 +19,10 @@
     "scrape-techcrunch-supabase": "tsx yc_companies/scrape_techcrunch_supabase_pinecone.ts",
     "test-techcrunch": "tsx yc_companies/test_techcrunch_quick.ts",
     "enrich-startups": "tsx yc_companies/enrich_startup_data.ts",
-    "enrich-startup": "tsx yc_companies/enrich_startup_data.ts --id=",
+    "enrich-startup": "tsx yc_companies/enrich_startup_data.ts",
+    "enrich-agentic": "tsx yc_companies/agentic_enrichment.ts",
+    "list-startups": "tsx yc_companies/list_startups_for_enrichment.ts",
+    "create-test-startup": "tsx yc_companies/create_test_startup.ts",
     "type-check": "tsc --noEmit",
     "clean": "powershell -ExecutionPolicy Bypass -File scripts/clean.ps1"
   },

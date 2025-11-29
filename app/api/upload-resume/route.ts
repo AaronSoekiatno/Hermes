@@ -217,24 +217,17 @@ export async function POST(request: NextRequest) {
       }
     );
 
+    // Authentication is optional - allow uploads without sign-in
     const {
       data: { user },
       error: authError,
     } = await supabase.auth.getUser();
 
-    if (authError || !user || !user.email) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: 'Please sign in to upload your resume.',
-        },
-        { status: 401 }
-      );
-    }
-
-    const accountEmail = user.email;
-    const accountName =
-      (user.user_metadata?.full_name as string | undefined) ?? undefined;
+    const isAuthenticated = !authError && user && user.email;
+    const accountEmail = isAuthenticated ? user.email : null;
+    const accountName = isAuthenticated
+      ? ((user.user_metadata?.full_name as string | undefined) ?? undefined)
+      : undefined;
 
     // Check for API key
     const apiKey = process.env.GEMINI_API_KEY;
@@ -375,59 +368,63 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Save candidate to Pinecone (for vector search)
+    // Save candidate to Pinecone (for vector search) - only if authenticated
     let savedToDatabase = false;
     let databaseError: string | undefined;
-    try {
-      await upsertCandidate(
-        accountEmail,
-        embedding,
-        {
-          name: accountName ?? extractionResult.name,
+    if (isAuthenticated && accountEmail) {
+      try {
+        await upsertCandidate(
+          accountEmail,
+          embedding,
+          {
+            name: accountName ?? extractionResult.name,
+            email: accountEmail,
+            summary: extractionResult.summary,
+            skills: extractionResult.skills.join(', '),
+          }
+        );
+        savedToDatabase = true;
+        console.log('Successfully saved candidate to Pinecone:', {
+          name: extractionResult.name,
           email: accountEmail,
+        });
+      } catch (error) {
+        databaseError = error instanceof Error ? error.message : 'Unknown database error';
+        console.error('Failed to save candidate to Pinecone:', {
+          error: databaseError,
+          candidate: {
+            name: extractionResult.name,
+            email: accountEmail,
+          },
+          fullError: error,
+        });
+        // Continue even if DB save fails - we still want to return the extracted data
+      }
+
+      // Save candidate to Supabase (for detailed queries)
+      try {
+        await saveCandidate({
+          email: accountEmail,
+          name: accountName ?? extractionResult.name,
           summary: extractionResult.summary,
           skills: extractionResult.skills.join(', '),
-        }
-      );
-      savedToDatabase = true;
-      console.log('Successfully saved candidate to Pinecone:', {
-        name: extractionResult.name,
-        email: extractionResult.email,
-      });
-    } catch (error) {
-      databaseError = error instanceof Error ? error.message : 'Unknown database error';
-      console.error('Failed to save candidate to Pinecone:', {
-        error: databaseError,
-        candidate: {
+        });
+        console.log('Successfully saved candidate to Supabase:', {
           name: extractionResult.name,
-          email: extractionResult.email,
-        },
-        fullError: error,
-      });
-      // Continue even if DB save fails - we still want to return the extracted data
-    }
-
-    // Save candidate to Supabase (for detailed queries)
-    try {
-      await saveCandidate({
-        email: accountEmail,
-        name: accountName ?? extractionResult.name,
-        summary: extractionResult.summary,
-        skills: extractionResult.skills.join(', '),
-      });
-      console.log('Successfully saved candidate to Supabase:', {
-        name: extractionResult.name,
-        email: extractionResult.email,
-      });
-    } catch (error) {
-      console.error('Failed to save candidate to Supabase:', {
-        error: error instanceof Error ? error.message : 'Unknown error',
-        candidate: {
-          name: extractionResult.name,
-          email: extractionResult.email,
-        },
-      });
-      // Continue even if Supabase save fails
+          email: accountEmail,
+        });
+      } catch (error) {
+        console.error('Failed to save candidate to Supabase:', {
+          error: error instanceof Error ? error.message : 'Unknown error',
+          candidate: {
+            name: extractionResult.name,
+            email: accountEmail,
+          },
+        });
+        // Continue even if Supabase save fails
+      }
+    } else {
+      console.log('User not authenticated - skipping database save. Results will be returned for preview.');
     }
 
     // Find matching startups
@@ -437,11 +434,11 @@ export async function POST(request: NextRequest) {
       matches = await findMatchingStartups(embedding, 10);
       console.log(`Found ${matches.length} matching startups for candidate`);
       
-      // Save matches to Supabase
-      if (matches.length > 0) {
+      // Save matches to Supabase - only if authenticated
+      if (matches.length > 0 && isAuthenticated && accountEmail) {
         try {
           await saveMatches(
-            extractionResult.email,
+            accountEmail,
             matches.map((match) => ({
               startup_id: match.id,
               score: match.score,

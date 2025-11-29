@@ -8,6 +8,7 @@ import { Features } from "@/components/Features";
 import { StartupsCarousel } from "@/components/StartupsCarousel";
 import { Footer } from "@/components/Footer";
 import { SignInModal } from "@/components/SignInModal";
+import { SignUpModal } from "@/components/SignUpModal";
 import {
   Dialog,
   DialogContent,
@@ -36,28 +37,64 @@ const SAMPLE_MATCHED_STARTUPS = [
 
 export const Hero = () => {
   const [file, setFile] = useState<File | null>(null);
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [isSignInModalOpen, setIsSignInModalOpen] = useState(false);
+  const [isSignUpModalOpen, setIsSignUpModalOpen] = useState(false);
   const [showProgressModal, setShowProgressModal] = useState(false);
   const [showResultsModal, setShowResultsModal] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [matchedStartups, setMatchedStartups] = useState<string[]>([]);
+  const [matchCount, setMatchCount] = useState<number>(0);
+  const [pendingResumeData, setPendingResumeData] = useState<any>(null);
   const [user, setUser] = useState<User | null>(null);
   const { toast } = useToast();
   const progressIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
-    const getUser = async () => {
-      const { data } = await supabase.auth.getUser();
-      setUser(data.user ?? null);
+    // Clear any existing session on page load - users must sign in explicitly
+    const clearSession = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) {
+        await supabase.auth.signOut();
+      }
+      setUser(null);
     };
-    getUser();
+    clearSession();
 
+    // Only listen for auth state changes (when user signs in/out)
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
+    } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      const newUser = session?.user ?? null;
+      setUser(newUser);
+      
+      // If user just signed in and we have pending resume data, save it
+      if (newUser && pendingResumeData && !pendingResumeData.savedToDatabase && uploadedFile) {
+        try {
+          // Re-upload the resume to save it now that user is authenticated
+          const formData = new FormData();
+          formData.append("resume", uploadedFile);
+          
+          const saveResponse = await fetch("/api/upload-resume", {
+            method: "POST",
+            body: formData,
+            credentials: 'include',
+          });
+          
+          if (saveResponse.ok) {
+            toast({
+              title: "Resume saved",
+              description: "Your matches have been saved. You can now view them.",
+            });
+            // Update pending data to mark as saved
+            setPendingResumeData({ ...pendingResumeData, savedToDatabase: true });
+          }
+        } catch (error) {
+          console.error('Failed to save resume after sign-in:', error);
+        }
+      }
     });
 
     return () => {
@@ -66,7 +103,7 @@ export const Hero = () => {
         clearInterval(progressIntervalRef.current);
       }
     };
-  }, []);
+  }, [pendingResumeData, uploadedFile, toast]);
 
   const startProgressSimulation = () => {
     if (progressIntervalRef.current) {
@@ -106,6 +143,7 @@ export const Hero = () => {
       const response = await fetch("/api/upload-resume", {
         method: "POST",
         body: formData,
+        credentials: 'include',
       });
 
       if (!response.ok) {
@@ -115,14 +153,23 @@ export const Hero = () => {
 
       stopProgressSimulation();
       setUploadProgress(100);
+      
+      const data = await response.json();
+      const matches = data.matches || [];
+      const count = matches.length;
+      setMatchCount(count);
       setMatchedStartups(simulateMatches());
+      
+      // Store resume data and file temporarily in case user needs to sign in
+      setPendingResumeData({ ...data, savedToDatabase: data.savedToDatabase || false });
+      setUploadedFile(resume); // Store the file for potential re-upload
 
       setTimeout(() => {
         setShowProgressModal(false);
         setShowResultsModal(true);
         toast({
           title: "Resume processed",
-          description: "We found a few startups that look like a great fit.",
+          description: `We found ${count} startup${count !== 1 ? 's' : ''} that look like a great fit.`,
         });
         setFile(null);
         if (fileInputRef.current) {
@@ -149,14 +196,7 @@ export const Hero = () => {
     const selectedFile = e.target.files?.[0];
     if (selectedFile) {
       if (selectedFile.type === 'application/pdf' || selectedFile.name.endsWith('.pdf')) {
-        if (!user) {
-          toast({
-            title: "Please sign in",
-            description: "Sign in to upload your resume and get matched with startups.",
-          });
-          setIsSignInModalOpen(true);
-          return;
-        }
+        // Allow uploads without sign-in
         setFile(selectedFile);
         void uploadResume(selectedFile);
       } else {
@@ -205,20 +245,53 @@ export const Hero = () => {
               </DropdownMenuContent>
             </DropdownMenu>
           ) : (
-            <Button 
-              variant="outline" 
-              onClick={() => setIsSignInModalOpen(true)}
-              className="backdrop-blur-3xl bg-background/40 hover:bg-background/60 transition-all hover:-translate-y-1 duration-300 border-white/30 rounded-2xl text-white hover:text-white"
-            >
-              Sign In
-            </Button>
+            <div className="flex items-center gap-3">
+              <Button 
+                variant="outline" 
+                onClick={() => setIsSignInModalOpen(true)}
+                className="backdrop-blur-3xl bg-background/40 hover:bg-background/60 transition-all hover:-translate-y-1 duration-300 border-white/30 rounded-2xl text-white hover:text-white"
+              >
+                Sign In
+              </Button>
+              <Button 
+                variant="outline" 
+                onClick={() => setIsSignUpModalOpen(true)}
+                className="backdrop-blur-3xl bg-background/40 hover:bg-background/60 transition-all hover:-translate-y-1 duration-300 border-white/30 rounded-2xl text-white hover:text-white"
+              >
+                Sign Up
+              </Button>
+            </div>
           )}
         </div>
 
         {/* Sign In Modal */}
         <SignInModal 
           open={isSignInModalOpen} 
-          onOpenChange={setIsSignInModalOpen} 
+          onOpenChange={(open) => {
+            setIsSignInModalOpen(open);
+            // If closing sign-in modal and user is now signed in, reopen results modal
+            if (!open && user && pendingResumeData) {
+              setTimeout(() => {
+                setShowResultsModal(true);
+              }, 100);
+            }
+          }} 
+        />
+
+        {/* Sign Up Modal */}
+        <SignUpModal 
+          open={isSignUpModalOpen} 
+          onOpenChange={(open) => {
+            setIsSignUpModalOpen(open);
+            // If closing sign-up modal and user is now signed in, reopen results modal
+            if (!open && user && pendingResumeData) {
+              setTimeout(() => {
+                setShowResultsModal(true);
+              }, 100);
+            }
+          }}
+          fromReview={pendingResumeData !== null && !user}
+          onSwitchToSignIn={() => setIsSignInModalOpen(true)}
         />
 
         {/* Content */}
@@ -301,10 +374,10 @@ export const Hero = () => {
         <DialogContent className="bg-black border-white/20 text-white sm:max-w-md text-center space-y-6">
           <DialogHeader>
             <DialogTitle className="text-3xl font-semibold text-white">
-              We’ve matched you!
+              We've matched you!
             </DialogTitle>
             <DialogDescription className="text-lg text-white">
-              You’ve matched with 10+ startups
+              You've matched with {matchCount} startup{matchCount !== 1 ? 's' : ''}
             </DialogDescription>
           </DialogHeader>
           <div className="text-white/70 text-sm">
@@ -312,9 +385,55 @@ export const Hero = () => {
           </div>
           <Button
             className="w-full bg-white text-black hover:bg-white/90"
-            onClick={() => setShowResultsModal(false)}
+            onClick={async () => {
+              setShowResultsModal(false);
+              
+              // Check if user is signed in
+              const { data: { user: currentUser } } = await supabase.auth.getUser();
+              
+              if (!currentUser) {
+                // User not signed in - prompt to sign up
+                // Close results modal and show sign-up modal
+                setShowResultsModal(false);
+                setIsSignUpModalOpen(true);
+              } else {
+                // User is signed in - save resume if not already saved and show results
+                if (pendingResumeData && !pendingResumeData.savedToDatabase && uploadedFile) {
+                  // Re-upload to save to database now that user is authenticated
+                  try {
+                    const formData = new FormData();
+                    formData.append("resume", uploadedFile);
+                    
+                    const saveResponse = await fetch("/api/upload-resume", {
+                      method: "POST",
+                      body: formData,
+                      credentials: 'include',
+                    });
+                    
+                    if (saveResponse.ok) {
+                      toast({
+                        title: "Resume saved",
+                        description: "Your matches are ready to view.",
+                      });
+                      setPendingResumeData(null);
+                      setUploadedFile(null);
+                    } else {
+                      throw new Error("Failed to save resume");
+                    }
+                  } catch (error) {
+                    toast({
+                      title: "Error",
+                      description: "Failed to save your resume. Please try uploading again.",
+                      variant: "destructive",
+                    });
+                  }
+                }
+                // TODO: Navigate to results page or show results component
+                // For now, just close the modal
+              }
+            }}
           >
-            See results
+            Continue to review
           </Button>
         </DialogContent>
       </Dialog>

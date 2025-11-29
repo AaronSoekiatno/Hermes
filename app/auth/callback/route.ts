@@ -34,8 +34,8 @@ export async function GET(request: NextRequest) {
       return NextResponse.redirect(new URL('/?error=auth_failed', origin));
     }
 
-    // Redirect to dashboard/app after successful authentication
-    return NextResponse.redirect(new URL('/app', origin));
+    // Redirect to home page after successful authentication
+    return NextResponse.redirect(new URL('/', origin));
   }
 
   // If no code, redirect to home

@@ -2,6 +2,7 @@ import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { createServerClient } from '@supabase/ssr';
 import { supabaseAdmin } from '@/lib/supabase';
+import { MatchCard } from '@/components/MatchCard';
 
 interface MatchRecord {
   id: string;
@@ -69,6 +70,7 @@ export default async function MatchesPage() {
         score,
         matched_at,
         startup:startups (
+          id,
           name,
           industry,
           location,
@@ -107,63 +109,7 @@ export default async function MatchesPage() {
         {typedMatches.length > 0 ? (
           <div className="grid gap-6 md:grid-cols-2">
             {typedMatches.map((match) => (
-              <article
-                key={match.id}
-                className="rounded-3xl border border-white/20 bg-white/10 backdrop-blur-xl p-6 shadow-2xl hover:bg-white/15 transition-all duration-300"
-              >
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h2 className="text-2xl font-semibold text-white">
-                      {match.startup?.name ?? 'Unknown Startup'}
-                    </h2>
-                    <p className="text-sm text-blue-200 mt-1">{match.startup?.industry}</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-sm text-blue-200">Match score</p>
-                    <p className="text-2xl font-bold text-blue-300">
-                      {(match.score * 100).toFixed(0)}%
-                    </p>
-                  </div>
-                </div>
-
-                <div className="mt-4 space-y-2 text-sm text-blue-100">
-                  {match.startup?.location && <p className="text-white/90">📍 Location: <span className="text-blue-200">{match.startup.location}</span></p>}
-                  {match.startup?.funding_stage && (
-                    <p className="text-white/90">
-                      💰 Funding: <span className="text-blue-200">{match.startup.funding_stage}</span>
-                      {match.startup.funding_amount && <span className="text-blue-200"> • {match.startup.funding_amount}</span>}
-                    </p>
-                  )}
-                  {match.startup?.tags && (
-                    <p className="text-xs uppercase tracking-widest text-blue-300 font-semibold mt-3">
-                      {match.startup.tags}
-                    </p>
-                  )}
-                </div>
-
-                <div className="mt-6 flex flex-wrap gap-3">
-                  {match.startup?.website && (
-                    <a
-                      href={match.startup.website.startsWith('http')
-                        ? match.startup.website
-                        : `https://${match.startup.website}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="rounded-2xl border border-white/30 bg-white/10 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/20 hover:border-white/40"
-                    >
-                      Visit website
-                    </a>
-                  )}
-                  {match.startup?.founder_emails && (
-                    <a
-                      href={`mailto:${match.startup.founder_emails}`}
-                      className="rounded-2xl bg-blue-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-400 shadow-lg hover:shadow-xl"
-                    >
-                      Email founder
-                    </a>
-                  )}
-                </div>
-              </article>
+              <MatchCard key={match.id} match={match} />
             ))}
           </div>
         ) : (

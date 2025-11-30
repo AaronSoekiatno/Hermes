@@ -20,7 +20,6 @@
     "test-techcrunch": "tsx yc_companies/test_techcrunch_quick.ts",
     "enrich-startups": "tsx yc_companies/enrich_startup_data.ts",
     "enrich-startup": "tsx yc_companies/enrich_startup_data.ts",
-    "enrich-agentic": "tsx yc_companies/agentic_enrichment.ts",
     "list-startups": "tsx yc_companies/list_startups_for_enrichment.ts",
     "list-poor-quality": "tsx yc_companies/list_poor_quality_startups.ts",
     "create-test-startup": "tsx yc_companies/create_test_startup.ts",

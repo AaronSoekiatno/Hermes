@@ -95,8 +95,6 @@ async function listStartupsNeedingEnrichment(limit: number = 10, showAll: boolea
   if (displayData.length > 0) {
     console.log(`\n💡 To enrich the first startup, run:`);
     console.log(`   npm run enrich-startup -- --id=${displayData[0].id}`);
-    console.log(`\n🤖 Or use agentic enrichment:`);
-    console.log(`   npm run enrich-agentic -- --id=${displayData[0].id}`);
     
     if (!showAll) {
       console.log(`\n📊 Summary:`);

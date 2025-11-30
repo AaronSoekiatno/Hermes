@@ -29,6 +29,7 @@ import {
   getEnrichmentStatus,
   getQualitySummary,
 } from './enrichment_quality';
+import { discoverFounderEmails } from './founder_email_discovery';
 
 // Initialize Supabase
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
@@ -133,6 +134,37 @@ async function searchWebForStartup(startup: StartupRecord): Promise<EnrichedData
           founder_backgrounds: comprehensive.founder_backgrounds || '',
         };
         
+        // If we have founder names but no emails, use email discovery
+        if (result.founder_names && !result.founder_emails && result.website) {
+          try {
+            console.log(`    🔍 Using email discovery for founders...`);
+            const websiteDomain = result.website.replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0];
+            const foundersArray = parseFounderNames(result.founder_names, result.founder_linkedin);
+            const emailDiscovery = await discoverFounderEmails(foundersArray, websiteDomain);
+            
+            if (emailDiscovery.emailsFound > 0 && emailDiscovery.founders.length > 0) {
+              // Combine emails from all founders
+              const emails = emailDiscovery.founders
+                .filter(f => f.email)
+                .map(f => f.email)
+                .join(', ');
+              
+              if (emails) {
+                result.founder_emails = emails;
+                console.log(`    ✅ Found ${emailDiscovery.emailsFound} email(s) via email discovery`);
+              }
+              
+              // Also update LinkedIn if we found it
+              const primaryFounder = emailDiscovery.primaryFounder || emailDiscovery.founders[0];
+              if (primaryFounder?.linkedin && !result.founder_linkedin) {
+                result.founder_linkedin = primaryFounder.linkedin;
+              }
+            }
+          } catch (error) {
+            console.warn(`    ⚠️  Email discovery failed:`, error instanceof Error ? error.message : String(error));
+          }
+        }
+        
         // Log what we found
         const foundFields = Object.entries(result)
           .filter(([_, value]) => value && value.trim())
@@ -166,6 +198,43 @@ async function searchWebForStartup(startup: StartupRecord): Promise<EnrichedData
       if (founderInfo.confidence) {
         const conf = founderInfo.confidence;
         console.log(`    Confidence: names=${(conf.founder_names || 0).toFixed(2)}, linkedin=${(conf.founder_linkedin || 0).toFixed(2)}, emails=${(conf.founder_emails || 0).toFixed(2)}`);
+      }
+      
+      // If we have founder names but no emails, use email discovery
+      if (enrichedData.founder_names && !enrichedData.founder_emails && (enrichedData.website || existingWebsite)) {
+        try {
+          console.log(`    🔍 Using email discovery for founders...`);
+          const websiteDomain = (enrichedData.website || existingWebsite || '')
+            .replace(/^https?:\/\//, '')
+            .replace(/^www\./, '')
+            .split('/')[0];
+          
+          if (websiteDomain) {
+            const foundersArray = parseFounderNames(enrichedData.founder_names, enrichedData.founder_linkedin);
+            const emailDiscovery = await discoverFounderEmails(foundersArray, websiteDomain);
+
+            if (emailDiscovery.emailsFound > 0 && emailDiscovery.founders.length > 0) {
+              // Combine emails from all founders
+              const emails = emailDiscovery.founders
+                .filter(f => f.email)
+                .map(f => f.email)
+                .join(', ');
+              
+              if (emails) {
+                enrichedData.founder_emails = emails;
+                console.log(`    ✅ Found ${emailDiscovery.emailsFound} email(s) via email discovery`);
+              }
+              
+              // Also update LinkedIn if we found it
+              const primaryFounder = emailDiscovery.primaryFounder || emailDiscovery.founders[0];
+              if (primaryFounder?.linkedin && !enrichedData.founder_linkedin) {
+                enrichedData.founder_linkedin = primaryFounder.linkedin;
+              }
+            }
+          }
+        } catch (error) {
+          console.warn(`    ⚠️  Email discovery failed:`, error instanceof Error ? error.message : String(error));
+        }
       }
     }
     
@@ -225,6 +294,30 @@ async function searchWebForStartup(startup: StartupRecord): Promise<EnrichedData
  *    - Team size, founder backgrounds
  *    - Job openings
  */
+/**
+ * Parse founder names from comma-separated string into array format
+ */
+function parseFounderNames(
+  founderNamesString: string | null | undefined,
+  linkedinString?: string | null | undefined
+): Array<{ name: string; role?: string; linkedin?: string }> {
+  if (!founderNamesString) return [];
+
+  const founders = founderNamesString
+    .split(',')
+    .map(name => name.trim())
+    .filter(name => name.length > 0);
+
+  // If we have a LinkedIn URL, we can't easily match it to specific founders
+  // So we'll only assign it to the first founder as a best guess
+  const linkedinUrl = linkedinString?.trim() || undefined;
+
+  return founders.map((name, index) => ({
+    name,
+    linkedin: index === 0 ? linkedinUrl : undefined, // Assign LinkedIn to first founder
+  }));
+}
+
 /**
  * Check if a field is null, undefined, or empty string
  */

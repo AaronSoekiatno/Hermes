@@ -1,8 +1,8 @@
 /**
- * Test Script for Phase 1: Enhanced Email Discovery
+ * Test Script for Pattern-Based Email Discovery
  *
- * This script tests the enhanced email discovery on real companies
- * from the database and measures success rates.
+ * This script tests pattern matching email discovery on companies from the database.
+ * Simplified approach: no web scraping, only pattern matching + verification.
  */
 
 import { resolve } from 'path';
@@ -10,7 +10,7 @@ import { config } from 'dotenv';
 config({ path: resolve(process.cwd(), '.env.local') });
 
 import { createClient } from '@supabase/supabase-js';
-import { discoverFounderEmails, FounderEmailDiscoveryResult } from './founder_email_discovery';
+import { discoverFounderEmails } from './founder_email_discovery';
 
 // Initialize Supabase
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
@@ -29,24 +29,24 @@ interface TestResult {
   emailsFound: number;
   primaryFounder: string;
   primaryEmail: string;
-  emailSources: string[];
-  tier1Success: boolean;
-  tier2Success: boolean;
   success: boolean;
   errorMessage?: string;
 }
 
 /**
- * Get test companies from database
- * Prioritize recently added companies from TechCrunch
+ * Get test companies from database with founder names
  */
 async function getTestCompanies(limit: number = 10): Promise<any[]> {
   console.log(`📊 Fetching ${limit} test companies from database...\n`);
 
   const { data, error } = await supabase
     .from('startups')
-    .select('id, name, website, data_source, created_at')
+    .select('id, name, website, founder_names, data_source, created_at')
     .eq('data_source', 'techcrunch')
+    .not('founder_names', 'is', null)
+    .not('founder_names', 'eq', '')
+    .not('website', 'is', null)
+    .not('website', 'eq', '')
     .order('created_at', { ascending: false })
     .limit(limit);
 
@@ -55,18 +55,32 @@ async function getTestCompanies(limit: number = 10): Promise<any[]> {
   }
 
   if (!data || data.length === 0) {
-    console.warn('⚠️  No TechCrunch companies found in database.');
+    console.warn('⚠️  No TechCrunch companies with founder names found in database.');
     console.warn('   Run the TechCrunch scraper first: npm run scrape-techcrunch\n');
     throw new Error('No test companies available');
   }
 
   console.log(`✅ Found ${data.length} companies for testing:\n`);
   data.forEach((company, i) => {
-    console.log(`   ${i + 1}. ${company.name} (${company.website || 'no website'})`);
+    const founders = company.founder_names ? company.founder_names.split(',').map((f: string) => f.trim()) : [];
+    console.log(`   ${i + 1}. ${company.name} (${founders.length} founders, ${company.website})`);
   });
   console.log('');
 
   return data;
+}
+
+/**
+ * Parse founder names from CSV string
+ */
+function parseFounderNames(founderNamesCSV: string | null): Array<{ name: string }> {
+  if (!founderNamesCSV) return [];
+
+  return founderNamesCSV
+    .split(',')
+    .map(name => name.trim())
+    .filter(name => name.length > 0)
+    .map(name => ({ name }));
 }
 
 /**
@@ -76,6 +90,7 @@ async function testCompany(company: any): Promise<TestResult> {
   console.log(`\n${'='.repeat(80)}`);
   console.log(`Testing: ${company.name}`);
   console.log(`Website: ${company.website || 'N/A'}`);
+  console.log(`Founders: ${company.founder_names || 'N/A'}`);
   console.log(`${'='.repeat(80)}\n`);
 
   const result: TestResult = {
@@ -85,19 +100,32 @@ async function testCompany(company: any): Promise<TestResult> {
     emailsFound: 0,
     primaryFounder: '',
     primaryEmail: '',
-    emailSources: [],
-    tier1Success: false,
-    tier2Success: false,
     success: false,
   };
 
   try {
+    // Parse founder names
+    const founders = parseFounderNames(company.founder_names);
+
+    if (founders.length === 0) {
+      throw new Error('No founder names available');
+    }
+
+    if (!company.website) {
+      throw new Error('No website available');
+    }
+
+    // Extract domain from website
+    const domain = company.website
+      .replace(/^https?:\/\//, '')
+      .replace(/^www\./, '')
+      .split('/')[0]
+      .toLowerCase();
+
+    console.log(`  📧 Pattern matching ${founders.length} founders @ ${domain}...\n`);
+
     // Run email discovery
-    const discoveryResult: FounderEmailDiscoveryResult = await discoverFounderEmails(
-      company.name,
-      company.website,
-      false // No Hunter.io
-    );
+    const discoveryResult = await discoverFounderEmails(founders, domain);
 
     result.foundersFound = discoveryResult.totalFound;
     result.emailsFound = discoveryResult.emailsFound;
@@ -107,23 +135,11 @@ async function testCompany(company: any): Promise<TestResult> {
       result.primaryEmail = discoveryResult.primaryFounder.email || '';
     }
 
-    // Track which sources found emails
-    result.emailSources = discoveryResult.founders
-      .filter(f => f.email && f.emailSource)
-      .map(f => f.emailSource!)
-      .filter((source, index, self) => self.indexOf(source) === index);
-
-    // Determine which tier succeeded
-    const tier1Sources = ['website', 'linkedin', 'github'];
-    const tier2Sources = ['angellist', 'producthunt'];
-
-    result.tier1Success = result.emailSources.some(s => tier1Sources.includes(s));
-    result.tier2Success = result.emailSources.some(s => tier2Sources.includes(s));
     result.success = result.emailsFound > 0;
 
     // Log results
     console.log(`\n📊 Results:`);
-    console.log(`   Founders found: ${result.foundersFound}`);
+    console.log(`   Founders tested: ${result.foundersFound}`);
     console.log(`   Emails found: ${result.emailsFound}`);
 
     if (result.primaryFounder) {
@@ -131,31 +147,18 @@ async function testCompany(company: any): Promise<TestResult> {
       console.log(`   Primary email: ${result.primaryEmail || 'N/A'}`);
     }
 
-    if (result.emailSources.length > 0) {
-      console.log(`   Email sources: ${result.emailSources.join(', ')}`);
-      console.log(`   Tier 1 success: ${result.tier1Success ? '✅' : '❌'}`);
-      console.log(`   Tier 2 success: ${result.tier2Success ? '✅' : '❌'}`);
-    }
-
     // Show all founders
     if (discoveryResult.founders.length > 0) {
-      console.log(`\n   All founders found:`);
+      console.log(`\n   All founders:`);
       discoveryResult.founders.forEach((founder, i) => {
         const emailStatus = founder.email ? `✅ ${founder.email}` : '❌ No email';
-        const source = founder.emailSource ? ` (${founder.emailSource})` : '';
         const confidence = founder.confidence ? ` [${(founder.confidence * 100).toFixed(0)}%]` : '';
-        console.log(`      ${i + 1}. ${founder.name} - ${emailStatus}${source}${confidence}`);
-        if (founder.linkedin) {
-          console.log(`         LinkedIn: ${founder.linkedin}`);
-        }
-        if (founder.role) {
-          console.log(`         Role: ${founder.role}`);
-        }
+        console.log(`      ${i + 1}. ${founder.name} - ${emailStatus}${confidence}`);
       });
     }
 
     if (result.success) {
-      console.log(`\n✅ SUCCESS: Found at least one founder email`);
+      console.log(`\n✅ SUCCESS: Found ${result.emailsFound} founder email(s)`);
     } else {
       console.log(`\n⚠️  NO EMAILS FOUND: Will need manual Hunter.io lookup`);
     }
@@ -182,36 +185,16 @@ function displayStatistics(results: TestResult[]) {
   const erroredCompanies = results.filter(r => r.errorMessage).length;
 
   const totalEmails = results.reduce((sum, r) => sum + r.emailsFound, 0);
-  const tier1Successes = results.filter(r => r.tier1Success).length;
-  const tier2Successes = results.filter(r => r.tier2Success).length;
+  const totalFounders = results.reduce((sum, r) => sum + r.foundersFound, 0);
 
   console.log(`📊 Overall Statistics:`);
   console.log(`   Total companies tested: ${totalCompanies}`);
   console.log(`   Companies with emails: ${successfulCompanies} (${(successfulCompanies / totalCompanies * 100).toFixed(1)}%)`);
   console.log(`   Companies without emails: ${failedCompanies} (${(failedCompanies / totalCompanies * 100).toFixed(1)}%)`);
   console.log(`   Errors encountered: ${erroredCompanies}`);
+  console.log(`   Total founders tested: ${totalFounders}`);
   console.log(`   Total emails found: ${totalEmails}`);
   console.log(`   Avg emails per company: ${(totalEmails / totalCompanies).toFixed(1)}`);
-
-  console.log(`\n🎯 Success by Tier:`);
-  console.log(`   Tier 1 (Website, LinkedIn, GitHub): ${tier1Successes} (${(tier1Successes / totalCompanies * 100).toFixed(1)}%)`);
-  console.log(`   Tier 2 (AngelList, Product Hunt): ${tier2Successes} (${(tier2Successes / totalCompanies * 100).toFixed(1)}%)`);
-
-  // Source breakdown
-  const allSources = results.flatMap(r => r.emailSources);
-  const sourceCounts: Record<string, number> = {};
-  allSources.forEach(source => {
-    sourceCounts[source] = (sourceCounts[source] || 0) + 1;
-  });
-
-  if (Object.keys(sourceCounts).length > 0) {
-    console.log(`\n📍 Email Sources Breakdown:`);
-    Object.entries(sourceCounts)
-      .sort((a, b) => b[1] - a[1])
-      .forEach(([source, count]) => {
-        console.log(`   ${source}: ${count} (${(count / totalCompanies * 100).toFixed(1)}%)`);
-      });
-  }
 
   // Success criteria check
   console.log(`\n✅ Success Criteria:`);
@@ -261,8 +244,8 @@ async function exportResults(results: TestResult[]) {
  * Main test function
  */
 async function runTests() {
-  console.log('🧪 Phase 1: Enhanced Email Discovery Testing\n');
-  console.log('This will test the email discovery on real companies from your database.\n');
+  console.log('🧪 Pattern-Based Email Discovery Testing\n');
+  console.log('This tests pattern matching + verification (no web scraping).\n');
 
   try {
     // Get test companies
@@ -276,10 +259,10 @@ async function runTests() {
       const result = await testCompany(company);
       results.push(result);
 
-      // Small delay between companies to avoid rate limiting
+      // Small delay between companies to avoid hitting API rate limits
       if (i < companies.length - 1) {
-        console.log(`\n⏳ Waiting 3 seconds before next company...`);
-        await new Promise(resolve => setTimeout(resolve, 3000));
+        console.log(`\n⏳ Waiting 2 seconds before next company...`);
+        await new Promise(resolve => setTimeout(resolve, 2000));
       }
     }
 
@@ -291,11 +274,12 @@ async function runTests() {
 
     // Final summary
     const successRate = (results.filter(r => r.success).length / results.length * 100);
-    if (successRate >= 60) {
-      console.log('✅ Phase 1 testing PASSED! Ready to proceed with Phase 2.\n');
+    if (successRate >= 75) {
+      console.log('✅ Pattern matching is performing excellently!\n');
+    } else if (successRate >= 60) {
+      console.log('✅ Pattern matching meets success criteria.\n');
     } else {
-      console.log('⚠️  Phase 1 testing shows lower than expected success rate.');
-      console.log('   Consider tweaking search strategies or adding more sources.\n');
+      console.log('⚠️  Lower than expected success rate. May need to manually use Hunter.io for remaining companies.\n');
     }
 
   } catch (error) {

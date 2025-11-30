@@ -22,7 +22,6 @@ export interface SearchResult {
 interface ExtractionConfidence {
   founder_names?: number;
   founder_linkedin?: number;
-  founder_emails?: number;
   website?: number;
   job_openings?: number;
   tech_stack?: number;
@@ -500,7 +499,6 @@ async function extractFounderInfoWithLLM(
 ): Promise<{
   founder_names: string;
   founder_linkedin: string;
-  founder_emails: string;
   confidence: ExtractionConfidence;
 }> {
   const genAI = getGeminiClient();
@@ -522,11 +520,9 @@ Extract the following information and return ONLY valid JSON (no markdown, no ex
 {
   "founder_names": "Comma-separated full names of founders/CEOs, or empty string if not found",
   "founder_linkedin": "LinkedIn profile URL (e.g., linkedin.com/in/username) or empty string",
-  "founder_emails": "Comma-separated email addresses or empty string if not found",
   "confidence": {
     "founder_names": 0.0-1.0,
-    "founder_linkedin": 0.0-1.0,
-    "founder_emails": 0.0-1.0
+    "founder_linkedin": 0.0-1.0
   }
 }
 
@@ -535,13 +531,6 @@ Rules:
 - If information is ambiguous or unclear, set confidence < 0.7
 - For founder_names: Extract full names (first + last), not just first names
 - For founder_linkedin: Extract full URL or profile path (linkedin.com/in/...)
-- For founder_emails: 
-  * ONLY extract emails that are EXPLICITLY mentioned in the search results
-  * NEVER generate, guess, or infer email addresses
-  * NEVER create emails from names or domains (e.g., don't create "john@company.com" from "John Doe" and "company.com")
-  * Skip emails from example.com, test.com, or any placeholder domains
-  * If no real email is found in the results, return empty string
-  * Set confidence to 0 if you're not certain the email is real and mentioned
 - Cross-reference multiple results for accuracy
 - Return empty strings if information is not found or uncertain`;
 
@@ -561,38 +550,9 @@ Rules:
     const cleanedResponse = cleanJsonResponse(responseText);
     const parsed = JSON.parse(cleanedResponse);
 
-    // Validate and filter emails - only keep if high confidence and not generic patterns
-    let founderEmails = parsed.founder_emails || '';
-    const emailConfidence = parsed.confidence?.founder_emails || 0;
-    
-    // If confidence is low (< 0.8) or emails look generic/hallucinated, clear them
-    if (founderEmails && emailConfidence < 0.8) {
-      founderEmails = '';
-    } else if (founderEmails) {
-      // Filter out generic email patterns that might be hallucinations
-      const emailList = founderEmails.split(',').map((e: string) => e.trim()).filter((e: string) => e);
-      const filteredEmails = emailList.filter((email: string) => {
-        const emailLower = email.toLowerCase();
-        // Exclude generic patterns
-        if (emailLower.match(/^(hello|info|contact|support|admin|noreply|no-reply|team|founders?)@/)) {
-          return false;
-        }
-        // Exclude example/test domains
-        if (emailLower.includes('example.com') || 
-            emailLower.includes('test.com') ||
-            emailLower.includes('placeholder') ||
-            emailLower.includes('sample')) {
-          return false;
-        }
-        return true;
-      });
-      founderEmails = filteredEmails.join(', ');
-    }
-
     return {
       founder_names: parsed.founder_names || '',
       founder_linkedin: parsed.founder_linkedin || '',
-      founder_emails: founderEmails,
       confidence: parsed.confidence || {},
     };
   } catch (error) {
@@ -632,10 +592,10 @@ Extract the following information and return ONLY valid JSON (no markdown, no ex
 {
   "founder_names": "Comma-separated full names of founders/CEOs, or empty string",
   "founder_linkedin": "LinkedIn profile URL or empty string",
-  "founder_emails": "Comma-separated email addresses or empty string",
   "website": "Official company website domain (e.g., example.com) or empty string",
   "location": "City, State/Country (e.g., 'San Francisco, CA', 'London, UK') or empty string",
   "industry": "Primary industry (e.g., 'Fintech', 'Healthcare', 'SaaS', 'AI') or empty string",
+  "funding_stage": "Funding stage (e.g., 'Seed', 'Series A', 'Series B', 'Series C', 'Pre-Seed', 'Bridge', 'IPO') or empty string",
   "hiring_roles": "Comma-separated job titles they're hiring for, or empty string",
   "tech_stack": "Comma-separated technologies/languages/frameworks, or empty string",
   "target_customer": "Enterprise, SMBs, Consumers, Developers, Startups, B2B, B2C, B2B2C, or empty string",
@@ -646,10 +606,10 @@ Extract the following information and return ONLY valid JSON (no markdown, no ex
   "confidence": {
     "founder_names": 0.0-1.0,
     "founder_linkedin": 0.0-1.0,
-    "founder_emails": 0.0-1.0,
     "website": 0.0-1.0,
     "location": 0.0-1.0,
     "industry": 0.0-1.0,
+    "funding_stage": 0.0-1.0,
     "hiring_roles": 0.0-1.0,
     "tech_stack": 0.0-1.0,
     "target_customer": 0.0-1.0,
@@ -668,13 +628,6 @@ Rules:
 - NEVER extract social media domains (linkedin.com, twitter.com, facebook.com, etc.)
 - NEVER extract news/aggregator sites (crunchbase.com, techcrunch.com, medium.com, etc.)
 - Only extract the actual company's official website domain
-- For founder_emails:
-  * ONLY extract emails that are EXPLICITLY mentioned in the search results
-  * NEVER generate, guess, or infer email addresses from names or domains
-  * NEVER create emails like "founder@company.com" or "hello@company.com" unless explicitly found
-  * Skip emails from example.com, test.com, or any placeholder domains
-  * If no real email is found in the results, return empty string
-  * Set confidence to 0 if you're not certain the email is real and mentioned
 - For tech_stack: List actual technologies mentioned, not inferred
 - For target_customer: Choose the most specific applicable category
 - Cross-reference multiple results for accuracy`;
@@ -715,41 +668,13 @@ Rules:
       }
     }
 
-    // Validate and filter emails - only keep if high confidence and not generic patterns
-    let founderEmails = parsed.founder_emails || '';
-    const emailConfidence = parsed.confidence?.founder_emails || 0;
-    
-    // If confidence is low (< 0.8) or emails look generic/hallucinated, clear them
-    if (founderEmails && emailConfidence < 0.8) {
-      founderEmails = '';
-    } else if (founderEmails) {
-      // Filter out generic email patterns that might be hallucinations
-      const emailList = founderEmails.split(',').map((e: string) => e.trim()).filter((e: string) => e);
-      const filteredEmails = emailList.filter((email: string) => {
-        const emailLower = email.toLowerCase();
-        // Exclude generic patterns
-        if (emailLower.match(/^(hello|info|contact|support|admin|noreply|no-reply|team|founders?)@/)) {
-          return false;
-        }
-        // Exclude example/test domains
-        if (emailLower.includes('example.com') || 
-            emailLower.includes('test.com') ||
-            emailLower.includes('placeholder') ||
-            emailLower.includes('sample')) {
-          return false;
-        }
-        return true;
-      });
-      founderEmails = filteredEmails.join(', ');
-    }
-
     return {
       founder_names: parsed.founder_names || '',
       founder_linkedin: parsed.founder_linkedin || '',
-      founder_emails: founderEmails,
       website: website,
       location: parsed.location || '',
       industry: parsed.industry || '',
+      funding_stage: parsed.funding_stage || '',
       hiring_roles: parsed.hiring_roles || '',
       tech_stack: parsed.tech_stack || '',
       target_customer: parsed.target_customer || '',
@@ -780,7 +705,6 @@ Rules:
 function extractFounderInfoRegex(results: SearchResult[], companyName: string): {
   founder_names: string;
   founder_linkedin: string;
-  founder_emails: string;
 } {
   const allText = results.map(r => `${r.title} ${r.snippet}`).join(' ');
   
@@ -805,32 +729,9 @@ function extractFounderInfoRegex(results: SearchResult[], companyName: string): 
     }
   }
   
-  // Extract emails - be very strict, only extract if explicitly found
-  // Do NOT generate emails from names or domains
-  const emailPattern = /([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/gi;
-  const emailMatches = allText.match(emailPattern) || [];
-  const emails = emailMatches.filter((email, index, self) => {
-    const emailLower = email.toLowerCase();
-    // Remove duplicates
-    if (self.indexOf(email) !== index) return false;
-    // Exclude example/test domains
-    if (emailLower.includes('example.com') || 
-        emailLower.includes('test.com') ||
-        emailLower.includes('placeholder') ||
-        emailLower.includes('sample')) return false;
-    // Exclude common generic patterns that might be hallucinations
-    if (emailLower.match(/^(hello|info|contact|support|admin|noreply|no-reply)@/)) {
-      // Only include if it's clearly a company email (not generic)
-      // We'll be conservative and exclude these unless we're very confident
-      return false;
-    }
-    return true;
-  }).join(', ');
-  
   return {
     founder_names: names.join(', '),
     founder_linkedin: linkedin,
-    founder_emails: emails,
   };
 }
 
@@ -843,7 +744,6 @@ export async function extractFounderInfo(
 ): Promise<{
   founder_names: string;
   founder_linkedin: string;
-  founder_emails: string;
   confidence?: ExtractionConfidence;
 }> {
   // Try LLM extraction first if available and quota not exceeded
@@ -851,17 +751,9 @@ export async function extractFounderInfo(
     try {
       const llmResult = await extractFounderInfoWithLLM(results, companyName);
       // Only use LLM results if confidence is reasonable
-      // For emails, require higher confidence (0.8) to prevent hallucinations
-      const emailConfidence = llmResult.confidence.founder_emails || 0;
-      if (llmResult.founder_emails && emailConfidence < 0.8) {
-        // Clear emails if confidence is too low
-        llmResult.founder_emails = '';
-      }
       if (
         (llmResult.confidence.founder_names || 0) >= 0.5 ||
-        (llmResult.confidence.founder_linkedin || 0) >= 0.5 ||
-        (emailConfidence >= 0.8 && llmResult.founder_emails) ||
-        (!llmResult.founder_emails && (llmResult.confidence.founder_names || 0) >= 0.5)
+        (llmResult.confidence.founder_linkedin || 0) >= 0.5
       ) {
         return llmResult;
       }
@@ -884,7 +776,6 @@ export async function extractFounderInfo(
     confidence: {
       founder_names: regexResult.founder_names ? 0.6 : 0,
       founder_linkedin: regexResult.founder_linkedin ? 0.6 : 0,
-      founder_emails: regexResult.founder_emails ? 0.6 : 0,
     },
   };
 }
@@ -1283,9 +1174,9 @@ export interface EnrichmentData {
   website: string;
   founder_names: string;
   founder_linkedin: string;
-  founder_emails: string;
   industry: string; // Primary industry category
   location: string; // Company headquarters location
+  funding_stage: string; // Funding stage (Seed, Series A, etc.)
   confidence?: ExtractionConfidence;
 }
 
@@ -1338,9 +1229,9 @@ export async function extractAllEnrichmentData(
     website: extractCompanyWebsite(results, companyName),
     location: location,
     industry: industry,
+    funding_stage: '', // Regex fallback doesn't extract funding_stage (requires LLM)
     founder_names: founderInfo.founder_names,
     founder_linkedin: founderInfo.founder_linkedin,
-    founder_emails: founderInfo.founder_emails,
     confidence: founderInfo.confidence,
   };
 }

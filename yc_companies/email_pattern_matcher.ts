@@ -19,6 +19,7 @@ export interface EmailVerificationResult {
   isDeliverable: boolean;
   reason?: string;
   confidence: number;
+  needsManualReview?: boolean; // True if should be checked with hunter.io
 }
 
 /**
@@ -246,11 +247,14 @@ export async function findFounderEmailByPattern(
 
   console.log(`     Generated ${patterns.length} email patterns`);
 
-  // Try each pattern, starting with most common
-  for (let i = 0; i < patterns.length; i++) {
+  // Try first 4 patterns (most common ones)
+  // If none work, mark for manual hunter.io review
+  const maxAttempts = Math.min(4, patterns.length);
+  
+  for (let i = 0; i < maxAttempts; i++) {
     const pattern = patterns[i];
 
-    console.log(`     ${i + 1}/${patterns.length} Testing: ${pattern.email} (${pattern.pattern}, ${(pattern.confidence * 100).toFixed(0)}% common)`);
+    console.log(`     ${i + 1}/${maxAttempts} Testing: ${pattern.email} (${pattern.pattern}, ${(pattern.confidence * 100).toFixed(0)}% common)`);
 
     // Verify the email
     const result = await verifyEmailWithRapid(pattern.email);
@@ -263,8 +267,23 @@ export async function findFounderEmailByPattern(
     }
 
     // Small delay to avoid rate limiting (1000/month = ~33/day = ~1.4/hour)
-    // With 7 patterns per founder, we can test ~5 founders per hour safely
+    // With 4 patterns per founder, we can test ~8 founders per hour safely
     await new Promise(resolve => setTimeout(resolve, 500));
+  }
+
+  // If we tried 4 patterns and none worked, mark for manual review
+  if (maxAttempts >= 4) {
+    console.log(`     ⚠️  No valid email found from ${maxAttempts} patterns - marking for manual hunter.io review`);
+    // Return a result indicating manual review needed
+    // Use the most likely pattern (first one) as a suggestion
+    return {
+      email: patterns[0].email,
+      isValid: false,
+      isDeliverable: false,
+      reason: 'Pattern matching failed - needs manual hunter.io review',
+      confidence: 0,
+      needsManualReview: true,
+    };
   }
 
   console.log(`     ⚠️  No valid email found from ${patterns.length} patterns`);

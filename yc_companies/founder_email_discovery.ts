@@ -92,13 +92,16 @@ export async function discoverFounderEmails(
       name: founder.name,
       role: founder.role,
       linkedin: founder.linkedin,
-      emailSource: result?.isDeliverable ? 'pattern_matched' : undefined,
+      emailSource: result?.isDeliverable ? 'pattern_matched' : result?.needsManualReview ? 'hunter.io' : undefined,
       confidence: result?.isDeliverable ? result.confidence * 0.85 : 0, // Pattern matched = high confidence
     };
 
     if (result && result.isDeliverable) {
       founderInfo.email = result.email;
       console.log(`     ✅ Found: ${result.email}`);
+    } else if (result && result.needsManualReview) {
+      console.log(`     ⚠️  Marked for manual hunter.io review`);
+      // Don't set email, but mark the source
     } else {
       console.log(`     ❌ No valid email found`);
     }
@@ -150,6 +153,14 @@ export async function discoverFounderEmail(
       role,
       emailSource: 'pattern_matched',
       confidence: result.confidence * 0.85,
+    };
+  } else if (result && result.needsManualReview) {
+    console.log(`⚠️  Marked for manual hunter.io review`);
+    return {
+      name: founderName,
+      role,
+      emailSource: 'hunter.io',
+      confidence: 0,
     };
   } else {
     console.log(`❌ No valid email found for ${founderName}`);

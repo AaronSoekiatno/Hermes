@@ -9,6 +9,9 @@
  * - More detailed company description
  * - Additional funding details
  * - Company logo/YC link if applicable
+ * 
+ * NOTE: Founder emails are NOT extracted here. They are handled separately
+ * by the email_pattern_matcher.ts and founder_email_discovery.ts modules.
  */
 
 import { resolve } from 'path';
@@ -29,7 +32,6 @@ import {
   getEnrichmentStatus,
   getQualitySummary,
 } from './enrichment_quality';
-import { discoverFounderEmails } from './founder_email_discovery';
 
 // Initialize Supabase
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
@@ -53,7 +55,6 @@ interface StartupRecord {
 
 interface EnrichedData {
   founder_names?: string;
-  founder_emails?: string;
   founder_linkedin?: string;
   website?: string;
   job_openings?: string;
@@ -122,10 +123,10 @@ async function searchWebForStartup(startup: StartupRecord): Promise<EnrichedData
         const result: EnrichedData = {
           founder_names: comprehensive.founder_names || '',
           founder_linkedin: comprehensive.founder_linkedin || '',
-          founder_emails: comprehensive.founder_emails || '',
           website: comprehensive.website || '',
           location: comprehensive.location || '',
           industry: comprehensive.industry || '',
+          funding_stage: comprehensive.funding_stage || '',
           job_openings: comprehensive.hiring_roles || '',
           tech_stack: comprehensive.tech_stack || '',
           target_customer: comprehensive.target_customer || '',
@@ -133,37 +134,6 @@ async function searchWebForStartup(startup: StartupRecord): Promise<EnrichedData
           team_size: comprehensive.team_size || '',
           founder_backgrounds: comprehensive.founder_backgrounds || '',
         };
-        
-        // If we have founder names but no emails, use email discovery
-        if (result.founder_names && !result.founder_emails && result.website) {
-          try {
-            console.log(`    🔍 Using email discovery for founders...`);
-            const websiteDomain = result.website.replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0];
-            const foundersArray = parseFounderNames(result.founder_names, result.founder_linkedin);
-            const emailDiscovery = await discoverFounderEmails(foundersArray, websiteDomain);
-            
-            if (emailDiscovery.emailsFound > 0 && emailDiscovery.founders.length > 0) {
-              // Combine emails from all founders
-              const emails = emailDiscovery.founders
-                .filter(f => f.email)
-                .map(f => f.email)
-                .join(', ');
-              
-              if (emails) {
-                result.founder_emails = emails;
-                console.log(`    ✅ Found ${emailDiscovery.emailsFound} email(s) via email discovery`);
-              }
-              
-              // Also update LinkedIn if we found it
-              const primaryFounder = emailDiscovery.primaryFounder || emailDiscovery.founders[0];
-              if (primaryFounder?.linkedin && !result.founder_linkedin) {
-                result.founder_linkedin = primaryFounder.linkedin;
-              }
-            }
-          } catch (error) {
-            console.warn(`    ⚠️  Email discovery failed:`, error instanceof Error ? error.message : String(error));
-          }
-        }
         
         // Log what we found
         const foundFields = Object.entries(result)
@@ -192,49 +162,10 @@ async function searchWebForStartup(startup: StartupRecord): Promise<EnrichedData
       const founderInfo = await extractFounderInfo(founderResults, companyName);
       if (founderInfo.founder_names) enrichedData.founder_names = founderInfo.founder_names;
       if (founderInfo.founder_linkedin) enrichedData.founder_linkedin = founderInfo.founder_linkedin;
-      if (founderInfo.founder_emails) enrichedData.founder_emails = founderInfo.founder_emails;
-      
       // Log confidence scores if available
       if (founderInfo.confidence) {
         const conf = founderInfo.confidence;
-        console.log(`    Confidence: names=${(conf.founder_names || 0).toFixed(2)}, linkedin=${(conf.founder_linkedin || 0).toFixed(2)}, emails=${(conf.founder_emails || 0).toFixed(2)}`);
-      }
-      
-      // If we have founder names but no emails, use email discovery
-      if (enrichedData.founder_names && !enrichedData.founder_emails && (enrichedData.website || existingWebsite)) {
-        try {
-          console.log(`    🔍 Using email discovery for founders...`);
-          const websiteDomain = (enrichedData.website || existingWebsite || '')
-            .replace(/^https?:\/\//, '')
-            .replace(/^www\./, '')
-            .split('/')[0];
-          
-          if (websiteDomain) {
-            const foundersArray = parseFounderNames(enrichedData.founder_names, enrichedData.founder_linkedin);
-            const emailDiscovery = await discoverFounderEmails(foundersArray, websiteDomain);
-
-            if (emailDiscovery.emailsFound > 0 && emailDiscovery.founders.length > 0) {
-              // Combine emails from all founders
-              const emails = emailDiscovery.founders
-                .filter(f => f.email)
-                .map(f => f.email)
-                .join(', ');
-              
-              if (emails) {
-                enrichedData.founder_emails = emails;
-                console.log(`    ✅ Found ${emailDiscovery.emailsFound} email(s) via email discovery`);
-              }
-              
-              // Also update LinkedIn if we found it
-              const primaryFounder = emailDiscovery.primaryFounder || emailDiscovery.founders[0];
-              if (primaryFounder?.linkedin && !enrichedData.founder_linkedin) {
-                enrichedData.founder_linkedin = primaryFounder.linkedin;
-              }
-            }
-          }
-        } catch (error) {
-          console.warn(`    ⚠️  Email discovery failed:`, error instanceof Error ? error.message : String(error));
-        }
+        console.log(`    Confidence: names=${(conf.founder_names || 0).toFixed(2)}, linkedin=${(conf.founder_linkedin || 0).toFixed(2)}`);
       }
     }
     
@@ -287,12 +218,16 @@ async function searchWebForStartup(startup: StartupRecord): Promise<EnrichedData
  *
  * WORKFLOW:
  * 1. TechCrunch scraper extracts ONLY: company name, funding amount/stage/date, and article description
- * 2. This enrichment agent uses web search to find ALL other data:
+ * 2. This enrichment agent uses web search to find:
  *    - Website, location, industry
- *    - Founders, emails, LinkedIn
+ *    - Founders, LinkedIn profiles
+ *    - Funding stage (round_type)
  *    - Tech stack, target customer, market vertical
  *    - Team size, founder backgrounds
  *    - Job openings
+ * 
+ * NOTE: Founder emails are handled separately by email_pattern_matcher.ts
+ * and founder_email_discovery.ts (pattern matching approach).
  */
 /**
  * Parse founder names from comma-separated string into array format
@@ -333,9 +268,6 @@ function isPlaceholderValue(value: any, field: string): boolean {
   const lower = value.toLowerCase().trim();
   
   // Common placeholder patterns
-  if (field === 'founder_emails' && (lower.startsWith('hello@') || lower.includes('example.com') || lower.includes('test.com'))) {
-    return true;
-  }
   if (field === 'founder_names' && (lower === 'team' || lower === 'founder' || lower === 'n/a')) {
     return true;
   }
@@ -352,10 +284,6 @@ function mergeEnrichedData(existing: StartupRecord, enriched: EnrichedData): Par
   // This allows overwriting placeholder data with real extracted data
   if (enriched.founder_names && (isEmptyOrNull(existing.founder_names) || isPlaceholderValue(existing.founder_names, 'founder_names'))) {
     updates.founder_names = enriched.founder_names;
-  }
-
-  if (enriched.founder_emails && (isEmptyOrNull(existing.founder_emails) || isPlaceholderValue(existing.founder_emails, 'founder_emails'))) {
-    updates.founder_emails = enriched.founder_emails;
   }
 
   if (enriched.founder_linkedin && (isEmptyOrNull(existing.founder_linkedin) || isPlaceholderValue(existing.founder_linkedin, 'founder_linkedin'))) {
@@ -378,6 +306,11 @@ function mergeEnrichedData(existing: StartupRecord, enriched: EnrichedData): Par
   // Funding amount: Only update if null/empty (TechCrunch should have this)
   if (enriched.funding_amount && isEmptyOrNull(existing.funding_amount)) {
     updates.funding_amount = enriched.funding_amount;
+  }
+
+  // Funding stage: Map to round_type column in database, only update if null/empty
+  if (enriched.funding_stage && isEmptyOrNull(existing.round_type)) {
+    updates.round_type = enriched.funding_stage;
   }
 
   if (enriched.location && isEmptyOrNull(existing.location)) {
@@ -467,7 +400,7 @@ async function enrichStartup(startup: StartupRecord): Promise<boolean> {
       const knownColumns = [
         'founder_names', 'founder_emails', 'founder_linkedin',
         'website', 'job_openings', 'description', 'funding_amount',
-        'funding_stage', 'location', 'industry',
+        'round_type', 'location', 'industry',
         // New columns (only include if migration has been run)
         'tech_stack', 'target_customer', 'market_vertical', 
         'team_size', 'founder_backgrounds', 'website_keywords'
@@ -503,7 +436,7 @@ async function enrichStartup(startup: StartupRecord): Promise<boolean> {
           const basicColumns = [
             'founder_names', 'founder_emails', 'founder_linkedin',
             'website', 'job_openings', 'description', 'funding_amount',
-            'funding_stage', 'location', 'industry'
+            'round_type', 'location', 'industry'
           ];
           const basicUpdates: Partial<StartupRecord> = {};
           for (const [key, value] of Object.entries(updates)) {

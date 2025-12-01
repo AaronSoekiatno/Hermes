@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation';
 import { createServerClient } from '@supabase/ssr';
 import { supabaseAdmin } from '@/lib/supabase';
 import { MatchCard } from '@/components/MatchCard';
+import { Header } from '@/components/Header';
 
 interface MatchRecord {
   id: string;
@@ -92,8 +93,10 @@ export default async function MatchesPage() {
   const typedMatches = ((matches ?? []) as unknown) as MatchRecord[];
 
   return (
-    <section className="min-h-screen bg-gradient-to-br from-blue-900 via-blue-800 to-indigo-900 dark:from-zinc-900 dark:via-zinc-950 dark:to-black py-20">
-      <div className="container mx-auto px-4 space-y-10">
+    <div className="min-h-screen bg-gradient-to-br from-blue-900 via-blue-800 to-indigo-900 dark:from-zinc-900 dark:via-zinc-950 dark:to-black">
+      <Header initialUser={user} />
+      <section className="py-20">
+        <div className="container mx-auto px-4 space-y-10">
         <div className="text-center space-y-4">
           <h1 className="text-4xl md:text-5xl font-bold text-blue-300">Startups excited to meet you</h1>
           <p className="text-white/90 text-lg">
@@ -116,8 +119,9 @@ export default async function MatchesPage() {
             <p className="text-lg text-white">No matches yet. Upload your resume to get started.</p>
           </div>
         )}
-      </div>
-    </section>
+        </div>
+      </section>
+    </div>
   );
 }
 

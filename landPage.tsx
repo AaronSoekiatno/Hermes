@@ -3,7 +3,7 @@
 import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { Upload, FileText, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { Features } from "@/components/Features";
 import { StartupsCarousel } from "@/components/StartupsCarousel";
@@ -26,7 +26,82 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import logo from "./images/logo.png";
+
+const PENDING_RESUME_DATA_KEY = "pendingResumeData";
+const PENDING_RESUME_FILE_KEY = "pendingResumeFile";
+
+const fileToDataUrl = (file: File) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+
+const dataUrlToFile = async (
+  dataUrl: string,
+  fileName: string,
+  mimeType: string
+) => {
+  const response = await fetch(dataUrl);
+  const blob = await response.blob();
+  return new File([blob], fileName, { type: mimeType || blob.type });
+};
+
+const savePendingResumeToStorage = async (
+  resumeData: any,
+  resumeFile: File
+) => {
+  if (typeof window === "undefined") return;
+  try {
+    sessionStorage.setItem(
+      PENDING_RESUME_DATA_KEY,
+      JSON.stringify(resumeData)
+    );
+    const dataUrl = await fileToDataUrl(resumeFile);
+    sessionStorage.setItem(
+      PENDING_RESUME_FILE_KEY,
+      JSON.stringify({
+        name: resumeFile.name,
+        type: resumeFile.type,
+        dataUrl,
+      })
+    );
+  } catch (error) {
+    console.error("Failed to persist pending resume data", error);
+  }
+};
+
+const loadPendingResumeFromStorage = () => {
+  if (typeof window === "undefined") {
+    return {
+      data: null as any,
+      file: null as { name: string; type: string; dataUrl: string } | null,
+    };
+  }
+  try {
+    const storedData = sessionStorage.getItem(PENDING_RESUME_DATA_KEY);
+    const storedFile = sessionStorage.getItem(PENDING_RESUME_FILE_KEY);
+    return {
+      data: storedData ? JSON.parse(storedData) : null,
+      file: storedFile ? JSON.parse(storedFile) : null,
+    };
+  } catch (error) {
+    console.error("Failed to load pending resume data", error);
+    return {
+      data: null as any,
+      file: null as { name: string; type: string; dataUrl: string } | null,
+    };
+  }
+};
+
+const clearPendingResumeStorage = () => {
+  if (typeof window === "undefined") return;
+  sessionStorage.removeItem(PENDING_RESUME_DATA_KEY);
+  sessionStorage.removeItem(PENDING_RESUME_FILE_KEY);
+};
 
 const SAMPLE_MATCHED_STARTUPS = [
   "Anthropic",
@@ -39,12 +114,14 @@ const SAMPLE_MATCHED_STARTUPS = [
 ];
 
 export const Hero = () => {
+  const router = useRouter();
   const [file, setFile] = useState<File | null>(null);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [isSignInModalOpen, setIsSignInModalOpen] = useState(false);
   const [isSignUpModalOpen, setIsSignUpModalOpen] = useState(false);
   const [showProgressModal, setShowProgressModal] = useState(false);
   const [showResultsModal, setShowResultsModal] = useState(false);
+  const [showSavingModal, setShowSavingModal] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [matchedStartups, setMatchedStartups] = useState<string[]>([]);
@@ -54,6 +131,108 @@ export const Hero = () => {
   const { toast } = useToast();
   const progressIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const reuploadInProgress = useRef(false);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const { data, file: storedFile } = loadPendingResumeFromStorage();
+    if (data) {
+      setPendingResumeData(data);
+    }
+    if (storedFile) {
+      dataUrlToFile(storedFile.dataUrl, storedFile.name, storedFile.type)
+        .then((restoredFile) => {
+          setUploadedFile(restoredFile);
+          setFile(restoredFile);
+        })
+        .catch((error) => {
+          console.error("Failed to restore pending resume file", error);
+          clearPendingResumeStorage();
+        });
+    }
+  }, []);
+
+  const reuploadPendingResume = useCallback(
+    async (options?: { silent?: boolean }) => {
+      if (!uploadedFile || reuploadInProgress.current) {
+        return false;
+      }
+      reuploadInProgress.current = true;
+      try {
+        const formData = new FormData();
+        formData.append("resume", uploadedFile);
+        const saveResponse = await fetch("/api/upload-resume", {
+          method: "POST",
+          body: formData,
+          credentials: "include",
+        });
+
+        if (!saveResponse.ok) {
+          const errorData = await saveResponse.json().catch(() => null);
+          throw new Error(errorData?.error || "Failed to save resume");
+        }
+
+        const data = await saveResponse.json();
+        const matches = data.matches || [];
+        setPendingResumeData({
+          ...data,
+          savedToDatabase: data.savedToDatabase ?? true,
+        });
+        setMatchCount(matches.length);
+        if (!options?.silent) {
+          setShowResultsModal(true);
+        }
+
+        clearPendingResumeStorage();
+        setUploadedFile(null);
+        setFile(null);
+
+        if (!options?.silent) {
+          toast({
+            title: "Resume saved",
+            description: "Your matches are ready to view.",
+          });
+        }
+
+        return true;
+      } catch (error) {
+        console.error("Failed to save resume", error);
+        if (!options?.silent) {
+          toast({
+            title: "Error",
+            description: "Failed to save your resume. Please try uploading again.",
+            variant: "destructive",
+          });
+        }
+        return false;
+      } finally {
+        reuploadInProgress.current = false;
+      }
+    },
+    [uploadedFile, toast]
+  );
+
+  useEffect(() => {
+    if (
+      user &&
+      pendingResumeData &&
+      !pendingResumeData.savedToDatabase &&
+      uploadedFile &&
+      !reuploadInProgress.current
+    ) {
+      setShowSavingModal(true);
+      reuploadPendingResume({ silent: true }).then((success) => {
+        if (success) {
+          // Small delay to ensure state is updated
+          setTimeout(() => {
+            setShowSavingModal(false);
+            router.push('/matches');
+          }, 500);
+        } else {
+          setShowSavingModal(false);
+        }
+      });
+    }
+  }, [user, pendingResumeData, uploadedFile, reuploadPendingResume, router]);
 
   useEffect(() => {
     // Initialize current user on mount
@@ -98,31 +277,21 @@ export const Hero = () => {
         newUser &&
         pendingResumeData &&
         !pendingResumeData.savedToDatabase &&
-        uploadedFile
+        uploadedFile &&
+        !reuploadInProgress.current
       ) {
-        try {
-          const formData = new FormData();
-          formData.append('resume', uploadedFile);
-
-          const saveResponse = await fetch('/api/upload-resume', {
-            method: 'POST',
-            body: formData,
-            credentials: 'include',
-          });
-
-          if (saveResponse.ok) {
-            toast({
-              title: 'Resume saved',
-              description: 'Your matches have been saved. You can now view them.',
-            });
-            setPendingResumeData({
-              ...pendingResumeData,
-              savedToDatabase: true,
-            });
+        setShowSavingModal(true);
+        reuploadPendingResume({ silent: true }).then((success) => {
+          if (success) {
+            // Navigate to matches page after successful save
+            setTimeout(() => {
+              setShowSavingModal(false);
+              router.push('/matches');
+            }, 500);
+          } else {
+            setShowSavingModal(false);
           }
-        } catch (error) {
-          console.error('Failed to save resume after sign-in:', error);
-        }
+        });
       }
     });
 
@@ -132,7 +301,7 @@ export const Hero = () => {
         clearInterval(progressIntervalRef.current);
       }
     };
-  }, [pendingResumeData, uploadedFile, toast]);
+  }, [pendingResumeData, uploadedFile, toast, reuploadPendingResume, router]);
 
   const startProgressSimulation = () => {
     if (progressIntervalRef.current) {
@@ -189,9 +358,20 @@ export const Hero = () => {
       setMatchCount(count);
       setMatchedStartups(simulateMatches());
       
+      const resumePayload = {
+        ...data,
+        savedToDatabase: data.savedToDatabase || false,
+      };
+
       // Store resume data and file temporarily in case user needs to sign in
-      setPendingResumeData({ ...data, savedToDatabase: data.savedToDatabase || false });
+      setPendingResumeData(resumePayload);
       setUploadedFile(resume); // Store the file for potential re-upload
+
+      if (resumePayload.savedToDatabase) {
+        clearPendingResumeStorage();
+      } else {
+        await savePendingResumeToStorage(resumePayload, resume);
+      }
 
       setTimeout(() => {
         setShowProgressModal(false);
@@ -224,14 +404,18 @@ export const Hero = () => {
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
     if (selectedFile) {
-      if (selectedFile.type === 'application/pdf' || selectedFile.name.endsWith('.pdf')) {
+      const isPdf = selectedFile.type === 'application/pdf' || selectedFile.name.endsWith('.pdf');
+      const isDocx = selectedFile.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || 
+                     selectedFile.name.endsWith('.docx');
+      
+      if (isPdf || isDocx) {
         // Allow uploads without sign-in
         setFile(selectedFile);
         void uploadResume(selectedFile);
       } else {
         toast({
           title: "Invalid file type",
-          description: "Please upload a PDF file",
+          description: "Please upload a PDF or DOCX file",
           variant: "destructive",
         });
       }
@@ -242,6 +426,9 @@ export const Hero = () => {
     e.preventDefault();
     e.stopPropagation();
     setFile(null);
+    setUploadedFile(null);
+    setPendingResumeData(null);
+    clearPendingResumeStorage();
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
@@ -366,45 +553,41 @@ export const Hero = () => {
               </p>
             </div>
 
-            {/* Apple-style Liquid Glass Resume Upload Block */}
-            <div className="animate-in fade-in slide-in-from-bottom-8 duration-1000 delay-300">
-          <div className="relative backdrop-blur-3xl bg-background/40 border border-border/30 rounded-[2.5rem] p-12 shadow-[0_8px_32px_0_rgba(31,38,135,0.15)]">
-                <div className="absolute inset-0 bg-gradient-to-br from-background/50 via-background/30 to-background/20 rounded-[2.5rem]" />
-                <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(120,119,198,0.1),transparent_50%)] rounded-[2.5rem]" />
-                
-                <div className="relative">
-                  <input
-                    id="resume"
-                    type="file"
-                    accept=".pdf"
-                    onChange={handleFileChange}
-                    className="hidden"
-                    ref={fileInputRef}
-                  />
+            {/* Resume Upload Section */}
+            <div className="animate-in fade-in slide-in-from-bottom-8 duration-1000 delay-300 max-w-md mx-auto">
+              <h2 className="text-white text-lg mb-4">Upload your resume here.</h2>
+              <div className="relative">
+                <input
+                  id="resume"
+                  type="file"
+                  accept=".pdf,.docx"
+                  onChange={handleFileChange}
+                  className="hidden"
+                  ref={fileInputRef}
+                />
+                <div className="flex items-center gap-3 bg-white/10 border border-white/20 rounded-lg p-3">
                   <label
                     htmlFor="resume"
-                    className="flex flex-col items-center justify-center gap-4 w-full min-h-[200px] cursor-pointer group"
+                    className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded cursor-pointer transition-colors text-sm font-medium"
                   >
-                    {file ? (
-                      <div className="relative flex flex-col items-center gap-4">
-                        <button
-                          onClick={handleRemoveFile}
-                          className="absolute -top-2 -right-2 h-8 w-8 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center transition-all duration-200 border border-white/30"
-                          aria-label="Remove file"
-                        >
-                          <X className="h-4 w-4 text-white" />
-                        </button>
-                        <FileText className="h-12 w-12 text-white transition-transform group-hover:scale-110 duration-300" />
-                        <span className="text-xl font-semibold text-white">{file.name}</span>
-                      </div>
-                    ) : (
-                      <>
-                        <Upload className="h-12 w-12 text-white/60 transition-all group-hover:text-white group-hover:scale-110 duration-300" />
-                        <span className="text-2xl font-semibold text-white">Send Resume</span>
-                      </>
-                    )}
+                    Choose File
                   </label>
+                  <span className="text-white/60 text-sm flex-1">
+                    {file ? file.name : "No file chosen"}
+                  </span>
+                  {file && (
+                    <button
+                      onClick={handleRemoveFile}
+                      className="text-white/60 hover:text-white transition-colors"
+                      aria-label="Remove file"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  )}
                 </div>
+                <p className="text-white/60 text-xs mt-2 text-center">
+                  .pdf and .docx only
+                </p>
               </div>
             </div>
           </div>
@@ -503,6 +686,25 @@ export const Hero = () => {
           >
             Continue to review
           </Button>
+        </DialogContent>
+      </Dialog>
+
+      {/* Saving Resume Modal - Shows after sign-in while saving resume */}
+      <Dialog open={showSavingModal} onOpenChange={() => {}}>
+        <DialogContent className="bg-black border-white/20 text-white sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-2xl font-semibold text-white text-center">
+              Saving your resume
+            </DialogTitle>
+            <DialogDescription className="text-white/60 text-center">
+              Please wait while we save your matches...
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 mt-4">
+            <div className="flex justify-center">
+              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white"></div>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
 

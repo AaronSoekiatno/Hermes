@@ -89,7 +89,11 @@ export async function POST(request: NextRequest) {
         name: candidate.name,
         email: candidate.email,
         summary: candidate.summary,
-        skills: candidate.skills.split(', ').filter(s => s.trim()),
+        // Split skills string into non-empty, trimmed values
+        skills: candidate.skills
+          .split(', ')
+          .map((s: string) => s.trim())
+          .filter((s: string) => s.length > 0),
       },
       {
         name: startup.name,
@@ -99,7 +103,11 @@ export async function POST(request: NextRequest) {
         fundingAmount: startup.funding_amount,
         location: startup.location,
         website: startup.website,
-        tags: startup.tags?.split(', ').filter(t => t.trim()),
+        // Split tags string into non-empty, trimmed values
+        tags: startup.tags
+          ?.split(', ')
+          .map((t: string) => t.trim())
+          .filter((t: string) => t.length > 0),
       },
       { score: matchScore }
     );

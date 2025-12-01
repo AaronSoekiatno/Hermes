@@ -9,6 +9,12 @@
  * - Uses Gemini AI for intelligent data extraction
  * - Falls back to regex patterns if LLM unavailable
  * - Provides confidence scores for extracted data
+ * 
+ * Anti-Hallucination Features:
+ * - Strict prompts that only extract EXPLICITLY stated information
+ * - Validation functions that filter out placeholders and generic values
+ * - Confidence thresholds (0.7 minimum) to reject uncertain extractions
+ * - Field-specific validation to ensure data quality matches schema requirements
  */
 
 import { GoogleGenerativeAI } from '@google/generative-ai';
@@ -511,28 +517,42 @@ async function extractFounderInfoWithLLM(
     .map((r, idx) => `[${idx + 1}] ${r.title}\n${r.snippet}\nURL: ${r.url}`)
     .join('\n\n');
 
-  const prompt = `You are a data extraction agent. Extract founder information about "${companyName}" from these search results.
+  const prompt = `You are a strict data extraction agent. Extract ONLY founder information that is EXPLICITLY stated in the search results below about "${companyName}".
+
+CRITICAL RULES:
+1. ONLY extract information that is DIRECTLY mentioned in the search results
+2. DO NOT infer, guess, or make up any information
+3. DO NOT use common knowledge or assumptions
+4. If information is not clearly stated, return an empty string
+5. Set confidence to 0.0 if you're not certain the information is in the results
 
 Search Results:
 ${context}
 
 Extract the following information and return ONLY valid JSON (no markdown, no explanation):
 {
-  "founder_names": "Comma-separated full names of founders/CEOs, or empty string if not found",
-  "founder_linkedin": "LinkedIn profile URL (e.g., linkedin.com/in/username) or empty string",
+  "founder_names": "Comma-separated full names of founders/CEOs EXPLICITLY mentioned (first + last name), or empty string",
+  "founder_linkedin": "LinkedIn profile URL EXPLICITLY mentioned (e.g., linkedin.com/in/username), or empty string",
   "confidence": {
     "founder_names": 0.0-1.0,
     "founder_linkedin": 0.0-1.0
   }
 }
 
-Rules:
-- Only extract information you're confident about (confidence >= 0.7)
-- If information is ambiguous or unclear, set confidence < 0.7
-- For founder_names: Extract full names (first + last), not just first names
-- For founder_linkedin: Extract full URL or profile path (linkedin.com/in/...)
-- Cross-reference multiple results for accuracy
-- Return empty strings if information is not found or uncertain`;
+STRICT EXTRACTION RULES:
+- For founder_names: Only extract if full names (first + last) are EXPLICITLY stated. Do NOT extract:
+  * Generic names like "Team", "Founder", "CEO", "Co-founder"
+  * Single first names only (must have last name)
+  * Placeholder values like "N/A", "TBD", "Unknown"
+- For founder_linkedin: Only extract if a LinkedIn URL is EXPLICITLY mentioned in the results
+- Cross-reference multiple results - if information conflicts, use the most common or set confidence lower
+- Return empty strings if information is not found or uncertain
+
+CONFIDENCE SCORING:
+- Set confidence to 0.9+ only if information is EXPLICITLY stated multiple times
+- Set confidence to 0.7-0.8 if information is clearly stated once
+- Set confidence to 0.0-0.6 if you're uncertain or inferring
+- Return empty string if confidence < 0.7`;
 
   try {
     // Rate limit before calling Gemini API
@@ -550,10 +570,26 @@ Rules:
     const cleanedResponse = cleanJsonResponse(responseText);
     const parsed = JSON.parse(cleanedResponse);
 
+    // Validate extracted data
+    const confidence = parsed.confidence || {};
+    const minConfidence = 0.7;
+    
+    const founder_names = validateFounderNames(
+      parsed.founder_names || '',
+      confidence.founder_names || 0,
+      minConfidence
+    );
+    
+    const founder_linkedin = validateLinkedIn(
+      parsed.founder_linkedin || '',
+      confidence.founder_linkedin || 0,
+      minConfidence
+    );
+
     return {
-      founder_names: parsed.founder_names || '',
-      founder_linkedin: parsed.founder_linkedin || '',
-      confidence: parsed.confidence || {},
+      founder_names,
+      founder_linkedin,
+      confidence,
     };
   } catch (error) {
     // Check if quota exceeded
@@ -567,7 +603,687 @@ Rules:
 }
 
 /**
+ * Validation functions to prevent hallucinations and ensure data quality
+ */
+
+/**
+ * Check if a value is a placeholder or generic value
+ */
+function isPlaceholderValue(value: string, field: string): boolean {
+  const lower = value.toLowerCase().trim();
+  const placeholders = [
+    'team', 'founder', 'ceo', 'n/a', 'na', 'tbd', 'to be determined',
+    'unknown', 'not specified', 'default', 'placeholder', 'example',
+    'test', 'sample', 'lorem ipsum'
+  ];
+  
+  if (placeholders.some(p => lower === p || lower.includes(p))) {
+    return true;
+  }
+  
+  // Field-specific placeholders
+  if (field === 'founder_names' && (lower === 'team' || lower === 'founder' || lower.split(' ').length < 2)) {
+    return true;
+  }
+  
+  if (field === 'website' && (lower === 'website.com' || lower === 'example.com' || !lower.includes('.'))) {
+    return true;
+  }
+  
+  return false;
+}
+
+/**
+ * Validate founder names - reject placeholders and ensure full names
+ */
+function validateFounderNames(value: string, confidence: number, minConfidence: number): string {
+  if (confidence < minConfidence) return '';
+  if (isPlaceholderValue(value, 'founder_names')) return '';
+  
+  // Must have at least first and last name (2+ words)
+  const names = value.split(',').map(n => n.trim()).filter(n => n.length > 0);
+  const validNames = names.filter(name => {
+    const parts = name.split(/\s+/);
+    return parts.length >= 2 && !isPlaceholderValue(name, 'founder_names');
+  });
+  
+  return validNames.length > 0 ? validNames.join(', ') : '';
+}
+
+/**
+ * Validate LinkedIn URL
+ */
+function validateLinkedIn(value: string, confidence: number, minConfidence: number): string {
+  if (confidence < minConfidence) return '';
+  if (!value.toLowerCase().includes('linkedin.com')) return '';
+  
+  // Clean up the URL
+  let cleaned = value.trim();
+  if (!cleaned.startsWith('http')) {
+    cleaned = 'https://' + cleaned;
+  }
+  
+  return cleaned;
+}
+
+/**
+ * Validate website domain
+ */
+function validateWebsite(value: string, confidence: number, minConfidence: number): string {
+  if (confidence < minConfidence) return '';
+  if (isPlaceholderValue(value, 'website')) return '';
+  
+  try {
+    // Remove protocol if present
+    let domain = value.replace(/^https?:\/\//, '').replace(/^www\./, '');
+    // Extract domain (remove path)
+    domain = domain.split('/')[0].toLowerCase();
+    
+    // Filter out excluded domains
+    if (isExcludedDomain(domain)) {
+      return '';
+    }
+    
+    // Must be a valid domain format
+    if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i.test(domain)) {
+      return '';
+    }
+    
+    return domain;
+  } catch (error) {
+    return '';
+  }
+}
+
+/**
+ * Validate location
+ */
+function validateLocation(value: string, confidence: number, minConfidence: number): string {
+  if (confidence < minConfidence) return '';
+  if (isPlaceholderValue(value, 'location')) return '';
+  
+  // Must contain at least a city name (2+ characters)
+  if (value.trim().length < 2) return '';
+  
+  return value.trim();
+}
+
+/**
+ * Validate industry
+ */
+function validateIndustry(value: string, confidence: number, minConfidence: number): string {
+  if (confidence < minConfidence) return '';
+  if (isPlaceholderValue(value, 'industry')) return '';
+  
+  // Must be a reasonable industry name (2+ characters)
+  if (value.trim().length < 2) return '';
+  
+  return value.trim();
+}
+
+/**
+ * Validate funding stage
+ */
+function validateFundingStage(value: string, confidence: number, minConfidence: number): string {
+  if (confidence < minConfidence) return '';
+  if (isPlaceholderValue(value, 'funding_stage')) return '';
+  
+  const validStages = [
+    'Pre-Seed', 'Pre-Seed', 'Seed', 'Series A', 'Series B', 'Series C',
+    'Series D', 'Series E', 'Bridge', 'IPO', 'Acquired', 'Bootstrapped'
+  ];
+  
+  const lower = value.trim();
+  // Check if it matches a valid stage (case-insensitive)
+  const isValid = validStages.some(stage => stage.toLowerCase() === lower.toLowerCase());
+  
+  return isValid ? value.trim() : '';
+}
+
+/**
+ * Validate hiring roles
+ */
+function validateHiringRoles(value: string, confidence: number, minConfidence: number): string {
+  if (confidence < minConfidence) return '';
+  if (isPlaceholderValue(value, 'hiring_roles')) return '';
+  
+  // Must contain actual job titles (not just generic terms)
+  const roles = value.split(',').map(r => r.trim()).filter(r => r.length > 0);
+  const validRoles = roles.filter(role => {
+    const lower = role.toLowerCase();
+    // Reject generic terms
+    if (['job', 'position', 'opening', 'role', 'hiring'].includes(lower)) {
+      return false;
+    }
+    return role.length >= 3; // Must be at least 3 characters
+  });
+  
+  return validRoles.length > 0 ? validRoles.join(', ') : '';
+}
+
+/**
+ * Validate tech stack
+ */
+function validateTechStack(value: string, confidence: number, minConfidence: number): string {
+  if (confidence < minConfidence) return '';
+  if (isPlaceholderValue(value, 'tech_stack')) return '';
+  
+  // Must contain actual technology names
+  const techs = value.split(',').map(t => t.trim()).filter(t => t.length > 0);
+  const validTechs = techs.filter(tech => {
+    // Reject generic terms
+    const lower = tech.toLowerCase();
+    if (['technology', 'tech', 'stack', 'tools'].includes(lower)) {
+      return false;
+    }
+    return tech.length >= 2;
+  });
+  
+  return validTechs.length > 0 ? validTechs.join(', ') : '';
+}
+
+/**
+ * Validate target customer
+ */
+function validateTargetCustomer(value: string, confidence: number, minConfidence: number): string {
+  if (confidence < minConfidence) return '';
+  if (isPlaceholderValue(value, 'target_customer')) return '';
+  
+  const validTargets = [
+    'Enterprise', 'SMBs', 'Small Businesses', 'Consumers', 'Developers',
+    'Startups', 'B2B', 'B2C', 'B2B2C', 'B2G'
+  ];
+  
+  const lower = value.trim();
+  const isValid = validTargets.some(target => target.toLowerCase() === lower.toLowerCase());
+  
+  return isValid ? value.trim() : '';
+}
+
+/**
+ * Validate market vertical
+ */
+function validateMarketVertical(value: string, confidence: number, minConfidence: number): string {
+  if (confidence < minConfidence) return '';
+  if (isPlaceholderValue(value, 'market_vertical')) return '';
+  
+  // Must contain industry and subcategory separated by dash or colon
+  if (value.trim().length < 5) return '';
+  
+  return value.trim();
+}
+
+/**
+ * Validate team size
+ */
+function validateTeamSize(value: string, confidence: number, minConfidence: number): string {
+  if (confidence < minConfidence) return '';
+  if (isPlaceholderValue(value, 'team_size')) return '';
+  
+  // Must match expected format (e.g., "1-10", "10-50", "50-200", "200-500", "500+")
+  const validFormats = [
+    /^\d+-\d+$/,  // e.g., "1-10"
+    /^\d+\+$/,    // e.g., "500+"
+    /^\d+$/,      // e.g., "50"
+  ];
+  
+  const trimmed = value.trim();
+  const isValid = validFormats.some(regex => regex.test(trimmed));
+  
+  return isValid ? trimmed : '';
+}
+
+/**
+ * Validate founder backgrounds
+ */
+function validateFounderBackgrounds(value: string, confidence: number, minConfidence: number): string {
+  if (confidence < minConfidence) return '';
+  if (isPlaceholderValue(value, 'founder_backgrounds')) return '';
+  
+  // Must contain actual company/university names
+  const backgrounds = value.split(',').map(b => b.trim()).filter(b => b.length > 0);
+  const validBackgrounds = backgrounds.filter(bg => {
+    // Reject generic terms
+    const lower = bg.toLowerCase();
+    if (['company', 'university', 'school', 'previous'].includes(lower)) {
+      return false;
+    }
+    return bg.length >= 3;
+  });
+  
+  return validBackgrounds.length > 0 ? validBackgrounds.join(', ') : '';
+}
+
+/**
+ * Validate website keywords
+ */
+function validateWebsiteKeywords(value: string, confidence: number, minConfidence: number): string {
+  if (confidence < minConfidence) return '';
+  if (isPlaceholderValue(value, 'website_keywords')) return '';
+
+  // Must contain actual keywords (not just generic terms)
+  const keywords = value.split(',').map(k => k.trim()).filter(k => k.length > 0);
+  const validKeywords = keywords.filter(kw => {
+    const lower = kw.toLowerCase();
+    // Reject generic terms
+    if (['keyword', 'tag', 'category', 'type'].includes(lower)) {
+      return false;
+    }
+    return kw.length >= 2;
+  });
+
+  return validKeywords.length > 0 ? validKeywords.join(', ') : '';
+}
+
+/**
+ * Validate funding amount
+ */
+function validateFundingAmount(value: string, confidence: number, minConfidence: number): string {
+  if (confidence < minConfidence) return '';
+  if (!value || typeof value !== 'string') return '';
+
+  const trimmed = value.trim();
+
+  // Must contain $ and a number with M or B suffix
+  const fundingPattern = /^\$?\s*\d+(\.\d+)?\s*[MB]\b/i;
+  if (!fundingPattern.test(trimmed)) return '';
+
+  // Normalize format: "$20M" or "$1.5B"
+  const match = trimmed.match(/(\d+(?:\.\d+)?)\s*([MB])/i);
+  if (match) {
+    return `$${match[1]}${match[2].toUpperCase()}`;
+  }
+
+  return '';
+}
+
+/**
+ * Validate funding date
+ */
+function validateFundingDate(value: string, confidence: number, minConfidence: number): string {
+  if (confidence < minConfidence) return '';
+  if (!value || typeof value !== 'string') return '';
+
+  const trimmed = value.trim();
+
+  // Accept formats: YYYY-MM-DD, YYYY-MM, YYYY
+  const datePatterns = [
+    /^\d{4}-\d{2}-\d{2}$/,  // YYYY-MM-DD
+    /^\d{4}-\d{2}$/,        // YYYY-MM
+    /^\d{4}$/,              // YYYY
+  ];
+
+  const isValid = datePatterns.some(pattern => pattern.test(trimmed));
+  if (!isValid) return '';
+
+  // Validate year is reasonable (2000-2030)
+  const year = parseInt(trimmed.substring(0, 4));
+  if (year < 2000 || year > 2030) return '';
+
+  return trimmed;
+}
+
+/**
+ * Validate required skills (technical skills from job postings)
+ */
+function validateRequiredSkills(value: string, confidence: number, minConfidence: number): string {
+  if (confidence < minConfidence) return '';
+  if (!value || typeof value !== 'string') return '';
+
+  // Must contain actual technology/skill names
+  const skills = value.split(',').map(s => s.trim()).filter(s => s.length > 0);
+  const validSkills = skills.filter(skill => {
+    const lower = skill.toLowerCase();
+
+    // Reject generic/soft skills
+    const genericTerms = [
+      'technology', 'tech', 'stack', 'tools', 'skills',
+      'teamwork', 'communication', 'leadership', 'problem solving',
+      'ability', 'experience', 'knowledge', 'strong', 'excellent'
+    ];
+
+    if (genericTerms.some(term => lower === term || lower.includes(term))) {
+      return false;
+    }
+
+    // Must be at least 2 characters
+    return skill.length >= 2;
+  });
+
+  return validSkills.length > 0 ? validSkills.join(', ') : '';
+}
+
+/**
+ * TARGETED EXTRACTION FUNCTIONS - Multi-Query Approach
+ * Instead of one big query, use specialized searches for better accuracy
+ */
+
+/**
+ * Extract company overview data (website, industry, location, description)
+ */
+async function extractCompanyOverviewWithLLM(
+  results: SearchResult[],
+  companyName: string
+): Promise<{
+  website: string;
+  industry: string;
+  location: string;
+  target_customer: string;
+  market_vertical: string;
+  website_keywords: string;
+  confidence: ExtractionConfidence;
+}> {
+  const genAI = getGeminiClient();
+  if (!genAI) {
+    throw new Error('GEMINI_API_KEY not set');
+  }
+
+  const context = results
+    .slice(0, 10)
+    .map((r, idx) => `[${idx + 1}] ${r.title}\n${r.snippet}\nURL: ${r.url}`)
+    .join('\n\n');
+
+  const prompt = `You are a strict data extraction agent. Extract ONLY company overview information that is EXPLICITLY stated in the search results about "${companyName}".
+
+CRITICAL RULES:
+1. ONLY extract information DIRECTLY mentioned in the search results
+2. DO NOT infer, guess, or use common knowledge
+3. If not clearly stated, return empty string
+4. Set confidence to 0.0 if uncertain
+
+Search Results:
+${context}
+
+Return ONLY valid JSON (no markdown):
+{
+  "website": "Official domain EXPLICITLY mentioned (e.g., 'example.com'), or empty",
+  "industry": "Primary industry EXPLICITLY stated (e.g., 'Fintech', 'Healthcare'), or empty",
+  "location": "City, State/Country EXPLICITLY mentioned (e.g., 'San Francisco, CA'), or empty",
+  "target_customer": "Target segment EXPLICITLY stated (Enterprise, SMBs, Consumers, Developers, B2B, B2C), or empty",
+  "market_vertical": "Specific vertical EXPLICITLY mentioned (e.g., 'Fintech - Payments'), or empty",
+  "website_keywords": "Keywords EXPLICITLY used to describe company, or empty",
+  "confidence": {
+    "website": 0.0-1.0,
+    "industry": 0.0-1.0,
+    "location": 0.0-1.0,
+    "target_customer": 0.0-1.0,
+    "market_vertical": 0.0-1.0,
+    "website_keywords": 0.0-1.0
+  }
+}
+
+VALIDATION:
+- website: domain only, not search engines/social media/news sites
+- location: must include city name
+- target_customer: must be one of the listed categories
+- Confidence 0.9+ if stated multiple times, 0.7-0.8 if stated once, 0.0-0.6 if uncertain`;
+
+  try {
+    await rateLimitGemini();
+    const modelName = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+    const model = genAI.getGenerativeModel({ model: modelName });
+
+    const result = await model.generateContent(prompt);
+    const responseText = result.response.text();
+    const cleanedResponse = cleanJsonResponse(responseText);
+    const parsed = JSON.parse(cleanedResponse);
+
+    const confidence = parsed.confidence || {};
+    const minConfidence = 0.7;
+
+    return {
+      website: validateWebsite(parsed.website || '', confidence.website || 0, minConfidence),
+      industry: validateIndustry(parsed.industry || '', confidence.industry || 0, minConfidence),
+      location: validateLocation(parsed.location || '', confidence.location || 0, minConfidence),
+      target_customer: validateTargetCustomer(parsed.target_customer || '', confidence.target_customer || 0, minConfidence),
+      market_vertical: validateMarketVertical(parsed.market_vertical || '', confidence.market_vertical || 0, minConfidence),
+      website_keywords: validateWebsiteKeywords(parsed.website_keywords || '', confidence.website_keywords || 0, minConfidence),
+      confidence,
+    };
+  } catch (error) {
+    if (isQuotaExceededError(error)) {
+      geminiQuotaExceeded = true;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Extract funding data (amount, round type, date)
+ */
+async function extractFundingDataWithLLM(
+  results: SearchResult[],
+  companyName: string
+): Promise<{
+  funding_amount: string;
+  funding_stage: string;
+  funding_date: string;
+  confidence: ExtractionConfidence;
+}> {
+  const genAI = getGeminiClient();
+  if (!genAI) {
+    throw new Error('GEMINI_API_KEY not set');
+  }
+
+  const context = results
+    .slice(0, 10)
+    .map((r, idx) => `[${idx + 1}] ${r.title}\n${r.snippet}\nURL: ${r.url}`)
+    .join('\n\n');
+
+  const prompt = `You are a strict data extraction agent. Extract ONLY funding information that is EXPLICITLY stated in the search results about "${companyName}".
+
+CRITICAL RULES:
+1. ONLY extract information DIRECTLY mentioned in the search results
+2. DO NOT infer or guess
+3. If not clearly stated, return empty string
+
+Search Results:
+${context}
+
+Return ONLY valid JSON (no markdown):
+{
+  "funding_amount": "Amount EXPLICITLY mentioned (e.g., '$5M', '$20M', '$100M'), or empty",
+  "funding_stage": "Stage EXPLICITLY mentioned (Pre-Seed, Seed, Series A/B/C/D, Bridge, IPO), or empty",
+  "funding_date": "Date EXPLICITLY mentioned (YYYY-MM-DD or YYYY-MM or YYYY), or empty",
+  "confidence": {
+    "funding_amount": 0.0-1.0,
+    "funding_stage": 0.0-1.0,
+    "funding_date": 0.0-1.0
+  }
+}
+
+VALIDATION:
+- funding_amount: must include $ and amount (M for millions, B for billions)
+- funding_stage: must match standard stages (not "Seed" if article says "Series A")
+- funding_date: must be a real date mentioned in results
+- Confidence 0.9+ if multiple mentions, 0.7-0.8 if once, <0.7 if uncertain`;
+
+  try {
+    await rateLimitGemini();
+    const modelName = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+    const model = genAI.getGenerativeModel({ model: modelName });
+
+    const result = await model.generateContent(prompt);
+    const responseText = result.response.text();
+    const cleanedResponse = cleanJsonResponse(responseText);
+    const parsed = JSON.parse(cleanedResponse);
+
+    const confidence = parsed.confidence || {};
+    const minConfidence = 0.7;
+
+    return {
+      funding_amount: validateFundingAmount(parsed.funding_amount || '', confidence.funding_amount || 0, minConfidence),
+      funding_stage: validateFundingStage(parsed.funding_stage || '', confidence.funding_stage || 0, minConfidence),
+      funding_date: validateFundingDate(parsed.funding_date || '', confidence.funding_date || 0, minConfidence),
+      confidence,
+    };
+  } catch (error) {
+    if (isQuotaExceededError(error)) {
+      geminiQuotaExceeded = true;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Extract team data (founders, backgrounds, team size)
+ */
+async function extractTeamDataWithLLM(
+  results: SearchResult[],
+  companyName: string
+): Promise<{
+  founder_names: string;
+  founder_linkedin: string;
+  founder_backgrounds: string;
+  team_size: string;
+  confidence: ExtractionConfidence;
+}> {
+  const genAI = getGeminiClient();
+  if (!genAI) {
+    throw new Error('GEMINI_API_KEY not set');
+  }
+
+  const context = results
+    .slice(0, 10)
+    .map((r, idx) => `[${idx + 1}] ${r.title}\n${r.snippet}\nURL: ${r.url}`)
+    .join('\n\n');
+
+  const prompt = `You are a strict data extraction agent. Extract ONLY team information that is EXPLICITLY stated in the search results about "${companyName}".
+
+CRITICAL RULES:
+1. ONLY extract information DIRECTLY mentioned
+2. DO NOT infer or guess
+3. Full names only (first + last)
+
+Search Results:
+${context}
+
+Return ONLY valid JSON (no markdown):
+{
+  "founder_names": "Comma-separated FULL names EXPLICITLY mentioned (first + last), or empty",
+  "founder_linkedin": "LinkedIn URL EXPLICITLY mentioned, or empty",
+  "founder_backgrounds": "Previous companies/universities EXPLICITLY mentioned, or empty",
+  "team_size": "Team size EXPLICITLY mentioned with numbers (e.g., '10-50', '200+'), or empty",
+  "confidence": {
+    "founder_names": 0.0-1.0,
+    "founder_linkedin": 0.0-1.0,
+    "founder_backgrounds": 0.0-1.0,
+    "team_size": 0.0-1.0
+  }
+}
+
+VALIDATION:
+- founder_names: Must have first AND last name, no generic titles like "CEO", "Team"
+- founder_linkedin: Must be valid LinkedIn URL
+- founder_backgrounds: Must be specific company/university names, not generic terms
+- team_size: Must match format like '1-10', '10-50', '500+'`;
+
+  try {
+    await rateLimitGemini();
+    const modelName = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+    const model = genAI.getGenerativeModel({ model: modelName });
+
+    const result = await model.generateContent(prompt);
+    const responseText = result.response.text();
+    const cleanedResponse = cleanJsonResponse(responseText);
+    const parsed = JSON.parse(cleanedResponse);
+
+    const confidence = parsed.confidence || {};
+    const minConfidence = 0.7;
+
+    return {
+      founder_names: validateFounderNames(parsed.founder_names || '', confidence.founder_names || 0, minConfidence),
+      founder_linkedin: validateLinkedIn(parsed.founder_linkedin || '', confidence.founder_linkedin || 0, minConfidence),
+      founder_backgrounds: validateFounderBackgrounds(parsed.founder_backgrounds || '', confidence.founder_backgrounds || 0, minConfidence),
+      team_size: validateTeamSize(parsed.team_size || '', confidence.team_size || 0, minConfidence),
+      confidence,
+    };
+  } catch (error) {
+    if (isQuotaExceededError(error)) {
+      geminiQuotaExceeded = true;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Extract job openings and REQUIRED SKILLS from job descriptions
+ * This is much better than guessing tech stack - it shows what skills they actually need
+ */
+async function extractJobsAndSkillsWithLLM(
+  results: SearchResult[],
+  companyName: string
+): Promise<{
+  hiring_roles: string;
+  required_skills: string;
+  confidence: ExtractionConfidence;
+}> {
+  const genAI = getGeminiClient();
+  if (!genAI) {
+    throw new Error('GEMINI_API_KEY not set');
+  }
+
+  const context = results
+    .slice(0, 10)
+    .map((r, idx) => `[${idx + 1}] ${r.title}\n${r.snippet}\nURL: ${r.url}`)
+    .join('\n\n');
+
+  const prompt = `You are a strict data extraction agent. Extract ONLY job and skill information that is EXPLICITLY stated in job postings for "${companyName}".
+
+CRITICAL RULES:
+1. ONLY extract from actual job postings/career pages
+2. DO NOT guess technologies based on industry
+3. Extract skills/requirements that are EXPLICITLY listed
+
+Search Results:
+${context}
+
+Return ONLY valid JSON (no markdown):
+{
+  "hiring_roles": "Job titles EXPLICITLY mentioned in postings (comma-separated), or empty",
+  "required_skills": "Skills/technologies EXPLICITLY required in job descriptions (e.g., 'Python, React, AWS, PostgreSQL'), or empty",
+  "confidence": {
+    "hiring_roles": 0.0-1.0,
+    "required_skills": 0.0-1.0
+  }
+}
+
+VALIDATION:
+- hiring_roles: Must be specific job titles (e.g., 'Software Engineer', 'Product Manager'), not generic terms
+- required_skills: Must be EXPLICITLY mentioned in job requirements (languages, frameworks, tools, platforms)
+- Focus on technical skills: programming languages, frameworks, databases, cloud platforms, tools
+- DO NOT include soft skills like 'teamwork', 'communication'
+- Confidence 0.9+ if from multiple job postings, 0.7-0.8 if from one posting`;
+
+  try {
+    await rateLimitGemini();
+    const modelName = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+    const model = genAI.getGenerativeModel({ model: modelName });
+
+    const result = await model.generateContent(prompt);
+    const responseText = result.response.text();
+    const cleanedResponse = cleanJsonResponse(responseText);
+    const parsed = JSON.parse(cleanedResponse);
+
+    const confidence = parsed.confidence || {};
+    const minConfidence = 0.7;
+
+    return {
+      hiring_roles: validateHiringRoles(parsed.hiring_roles || '', confidence.hiring_roles || 0, minConfidence),
+      required_skills: validateRequiredSkills(parsed.required_skills || '', confidence.required_skills || 0, minConfidence),
+      confidence,
+    };
+  } catch (error) {
+    if (isQuotaExceededError(error)) {
+      geminiQuotaExceeded = true;
+    }
+    throw error;
+  }
+}
+
+/**
  * Extract comprehensive enrichment data using LLM
+ * DEPRECATED: Use targeted extraction functions above for better accuracy
  */
 async function extractAllEnrichmentDataWithLLM(
   results: SearchResult[],
@@ -583,26 +1299,33 @@ async function extractAllEnrichmentDataWithLLM(
     .map((r, idx) => `[${idx + 1}] ${r.title}\n${r.snippet}\nURL: ${r.url}`)
     .join('\n\n');
 
-  const prompt = `You are a data extraction agent. Extract comprehensive information about "${companyName}" from these search results.
+  const prompt = `You are a strict data extraction agent. Extract ONLY information that is EXPLICITLY stated in the search results below about "${companyName}".
+
+CRITICAL RULES - READ CAREFULLY:
+1. ONLY extract information that is DIRECTLY mentioned in the search results
+2. DO NOT infer, guess, or make up any information
+3. DO NOT use common knowledge or assumptions
+4. If information is not clearly stated, return an empty string
+5. Set confidence to 0.0 if you're not certain the information is in the results
 
 Search Results:
 ${context}
 
 Extract the following information and return ONLY valid JSON (no markdown, no explanation):
 {
-  "founder_names": "Comma-separated full names of founders/CEOs, or empty string",
-  "founder_linkedin": "LinkedIn profile URL or empty string",
-  "website": "Official company website domain (e.g., example.com) or empty string",
-  "location": "City, State/Country (e.g., 'San Francisco, CA', 'London, UK') or empty string",
-  "industry": "Primary industry (e.g., 'Fintech', 'Healthcare', 'SaaS', 'AI') or empty string",
-  "funding_stage": "Funding stage (e.g., 'Seed', 'Series A', 'Series B', 'Series C', 'Pre-Seed', 'Bridge', 'IPO') or empty string",
-  "hiring_roles": "Comma-separated job titles they're hiring for, or empty string",
-  "tech_stack": "Comma-separated technologies/languages/frameworks, or empty string",
-  "target_customer": "Enterprise, SMBs, Consumers, Developers, Startups, B2B, B2C, B2B2C, or empty string",
-  "market_vertical": "Specific market vertical (e.g., 'Fintech - Payments', 'Healthcare - Telemedicine') or empty string",
-  "team_size": "Team size range (e.g., '1-10', '10-50', '50-200', '200-500', '500+') or empty string",
-  "founder_backgrounds": "Comma-separated previous companies/universities, or empty string",
-  "website_keywords": "Comma-separated relevant keywords describing the company, or empty string",
+  "founder_names": "Comma-separated full names of founders/CEOs EXPLICITLY mentioned in results, or empty string",
+  "founder_linkedin": "LinkedIn profile URL EXPLICITLY mentioned in results, or empty string",
+  "website": "Official company website domain EXPLICITLY mentioned (e.g., example.com), or empty string",
+  "location": "City, State/Country EXPLICITLY mentioned (e.g., 'San Francisco, CA', 'London, UK'), or empty string",
+  "industry": "Primary industry EXPLICITLY stated (e.g., 'Fintech', 'Healthcare', 'SaaS', 'AI'), or empty string",
+  "funding_stage": "Funding stage EXPLICITLY mentioned (e.g., 'Seed', 'Series A', 'Series B', 'Series C', 'Pre-Seed', 'Bridge', 'IPO'), or empty string",
+  "hiring_roles": "Job titles EXPLICITLY mentioned in job postings/careers pages, or empty string",
+  "tech_stack": "Technologies EXPLICITLY mentioned in the results (not inferred), or empty string",
+  "target_customer": "Target customer EXPLICITLY stated (Enterprise, SMBs, Consumers, Developers, Startups, B2B, B2C, B2B2C), or empty string",
+  "market_vertical": "Market vertical EXPLICITLY mentioned (e.g., 'Fintech - Payments', 'Healthcare - Telemedicine'), or empty string",
+  "team_size": "Team size EXPLICITLY mentioned with numbers (e.g., '1-10', '10-50', '50-200', '200-500', '500+'), or empty string",
+  "founder_backgrounds": "Previous companies/universities EXPLICITLY mentioned, or empty string",
+  "website_keywords": "Keywords EXPLICITLY describing the company in results, or empty string",
   "confidence": {
     "founder_names": 0.0-1.0,
     "founder_linkedin": 0.0-1.0,
@@ -620,17 +1343,31 @@ Extract the following information and return ONLY valid JSON (no markdown, no ex
   }
 }
 
-Rules:
-- Only extract information you're confident about (confidence >= 0.7 for important fields)
-- Return empty strings if information is not found or uncertain
-- For website: Extract just the domain (e.g., "stripe.com"), not full URLs
-- NEVER extract search engine domains (duckduckgo.com, google.com, bing.com, etc.)
-- NEVER extract social media domains (linkedin.com, twitter.com, facebook.com, etc.)
-- NEVER extract news/aggregator sites (crunchbase.com, techcrunch.com, medium.com, etc.)
-- Only extract the actual company's official website domain
-- For tech_stack: List actual technologies mentioned, not inferred
-- For target_customer: Choose the most specific applicable category
-- Cross-reference multiple results for accuracy`;
+STRICT EXTRACTION RULES:
+- For founder_names: Only extract if full names (first + last) are EXPLICITLY stated. Do NOT extract generic names like "Team", "Founder", "CEO", or single first names only
+- For founder_linkedin: Only extract if a LinkedIn URL is EXPLICITLY mentioned in the results
+- For website: Extract ONLY the domain (e.g., "stripe.com"), not full URLs. NEVER extract search engines, social media, or news sites
+- For location: Only extract if a specific city/location is EXPLICITLY mentioned
+- For industry: Only extract if the industry is EXPLICITLY stated, not inferred from description
+- For funding_stage: Only extract if funding stage is EXPLICITLY mentioned (not inferred from batch or other info)
+- For hiring_roles: Only extract if specific job titles are EXPLICITLY mentioned in job postings
+- For tech_stack: Only list technologies EXPLICITLY mentioned in the results. Do NOT infer based on industry
+- For target_customer: Only extract if EXPLICITLY stated. Do NOT infer from business model
+- For team_size: Only extract if a specific number or range is EXPLICITLY mentioned
+- For founder_backgrounds: Only extract if previous companies/universities are EXPLICITLY mentioned
+- For website_keywords: Only extract keywords EXPLICITLY used to describe the company
+
+CONFIDENCE SCORING:
+- Set confidence to 0.9+ only if information is EXPLICITLY stated multiple times
+- Set confidence to 0.7-0.8 if information is clearly stated once
+- Set confidence to 0.5-0.6 if information is implied but not explicit
+- Set confidence to 0.0-0.4 if you're uncertain or inferring
+- Return empty string if confidence < 0.7 for important fields
+
+VALIDATION:
+- Reject any extracted value that looks like a placeholder (e.g., "Team", "N/A", "TBD")
+- Reject generic values that could apply to any company
+- Cross-reference multiple results - if information conflicts, use the most common or set confidence lower`;
 
   try {
     // Rate limit before calling Gemini API
@@ -648,41 +1385,104 @@ Rules:
     const cleanedResponse = cleanJsonResponse(responseText);
     const parsed = JSON.parse(cleanedResponse);
 
+    // Validate and clean extracted data
+    const confidence = parsed.confidence || {};
+    const minConfidence = 0.7; // Minimum confidence threshold to accept data
+    
+    // Validate founder names - reject placeholders and generic names
+    let founder_names = parsed.founder_names || '';
+    if (founder_names) {
+      founder_names = validateFounderNames(founder_names, confidence.founder_names || 0, minConfidence);
+    }
+    
+    // Validate founder LinkedIn - must be a valid LinkedIn URL
+    let founder_linkedin = parsed.founder_linkedin || '';
+    if (founder_linkedin) {
+      founder_linkedin = validateLinkedIn(founder_linkedin, confidence.founder_linkedin || 0, minConfidence);
+    }
+    
     // Validate and clean website domain
     let website = parsed.website || '';
     if (website) {
-      try {
-        // Remove protocol if present
-        website = website.replace(/^https?:\/\//, '').replace(/^www\./, '');
-        // Extract domain (remove path)
-        const domain = website.split('/')[0].toLowerCase();
-        // Filter out excluded domains
-        if (isExcludedDomain(domain)) {
-          website = '';
-        } else {
-          website = domain;
-        }
-      } catch (error) {
-        // Invalid domain format, set to empty
-        website = '';
-      }
+      website = validateWebsite(website, confidence.website || 0, minConfidence);
+    }
+    
+    // Validate location
+    let location = parsed.location || '';
+    if (location) {
+      location = validateLocation(location, confidence.location || 0, minConfidence);
+    }
+    
+    // Validate industry
+    let industry = parsed.industry || '';
+    if (industry) {
+      industry = validateIndustry(industry, confidence.industry || 0, minConfidence);
+    }
+    
+    // Validate funding stage
+    let funding_stage = parsed.funding_stage || '';
+    if (funding_stage) {
+      funding_stage = validateFundingStage(funding_stage, confidence.funding_stage || 0, minConfidence);
+    }
+    
+    // Validate hiring roles
+    let hiring_roles = parsed.hiring_roles || '';
+    if (hiring_roles) {
+      hiring_roles = validateHiringRoles(hiring_roles, confidence.hiring_roles || 0, minConfidence);
+    }
+    
+    // Validate tech stack
+    let tech_stack = parsed.tech_stack || '';
+    if (tech_stack) {
+      tech_stack = validateTechStack(tech_stack, confidence.tech_stack || 0, minConfidence);
+    }
+    
+    // Validate target customer
+    let target_customer = parsed.target_customer || '';
+    if (target_customer) {
+      target_customer = validateTargetCustomer(target_customer, confidence.target_customer || 0, minConfidence);
+    }
+    
+    // Validate market vertical
+    let market_vertical = parsed.market_vertical || '';
+    if (market_vertical) {
+      market_vertical = validateMarketVertical(market_vertical, confidence.market_vertical || 0, minConfidence);
+    }
+    
+    // Validate team size
+    let team_size = parsed.team_size || '';
+    if (team_size) {
+      team_size = validateTeamSize(team_size, confidence.team_size || 0, minConfidence);
+    }
+    
+    // Validate founder backgrounds
+    let founder_backgrounds = parsed.founder_backgrounds || '';
+    if (founder_backgrounds) {
+      founder_backgrounds = validateFounderBackgrounds(founder_backgrounds, confidence.founder_backgrounds || 0, minConfidence);
+    }
+    
+    // Validate website keywords
+    let website_keywords = parsed.website_keywords || '';
+    if (website_keywords) {
+      website_keywords = validateWebsiteKeywords(website_keywords, confidence.website_keywords || 0, minConfidence);
     }
 
     return {
-      founder_names: parsed.founder_names || '',
-      founder_linkedin: parsed.founder_linkedin || '',
-      website: website,
-      location: parsed.location || '',
-      industry: parsed.industry || '',
-      funding_stage: parsed.funding_stage || '',
-      hiring_roles: parsed.hiring_roles || '',
-      tech_stack: parsed.tech_stack || '',
-      target_customer: parsed.target_customer || '',
-      market_vertical: parsed.market_vertical || '',
-      team_size: parsed.team_size || '',
-      founder_backgrounds: parsed.founder_backgrounds || '',
-      website_keywords: parsed.website_keywords || '',
-      confidence: parsed.confidence || {},
+      founder_names,
+      founder_linkedin,
+      website,
+      location,
+      industry,
+      funding_stage,
+      funding_date: '', // Not extracted in this deprecated function
+      hiring_roles,
+      required_skills: '', // Not extracted in this deprecated function (replaces tech_stack)
+      target_customer,
+      market_vertical,
+      team_size,
+      founder_backgrounds,
+      website_keywords,
+      confidence,
     };
   } catch (error) {
     // Check if quota exceeded
@@ -1164,7 +1964,7 @@ export function extractWebsiteKeywords(results: SearchResult[], companyName: str
  * Comprehensive enrichment function that extracts all features
  */
 export interface EnrichmentData {
-  tech_stack: string;
+  required_skills: string; // Skills/technologies required in job postings (replaces tech_stack)
   target_customer: string;
   market_vertical: string;
   team_size: string;
@@ -1177,11 +1977,129 @@ export interface EnrichmentData {
   industry: string; // Primary industry category
   location: string; // Company headquarters location
   funding_stage: string; // Funding stage (Seed, Series A, etc.)
+  funding_date: string; // Date of funding announcement
   confidence?: ExtractionConfidence;
 }
 
 /**
+ * NEW: Multi-Query Targeted Extraction (RECOMMENDED)
+ * Performs multiple specialized searches for better accuracy
+ */
+export async function extractWithMultipleQueries(companyName: string): Promise<EnrichmentData> {
+  console.log(`    Using multi-query approach for: ${companyName}`);
+
+  const enrichmentData: Partial<EnrichmentData> = {
+    required_skills: '',
+    target_customer: '',
+    market_vertical: '',
+    team_size: '',
+    founder_backgrounds: '',
+    website_keywords: '',
+    hiring_roles: '',
+    website: '',
+    founder_names: '',
+    founder_linkedin: '',
+    industry: '',
+    location: '',
+    funding_stage: '',
+    funding_date: '',
+  };
+
+  const allConfidence: ExtractionConfidence = {};
+
+  // Query 1: Company Overview
+  try {
+    console.log(`      Query 1/4: Company overview...`);
+    const overviewQuery = `${companyName} startup company official website`;
+    const overviewResults = await searchWeb(overviewQuery);
+    if (overviewResults.length > 0) {
+      const overview = await extractCompanyOverviewWithLLM(overviewResults, companyName);
+      enrichmentData.website = overview.website || enrichmentData.website;
+      enrichmentData.industry = overview.industry || enrichmentData.industry;
+      enrichmentData.location = overview.location || enrichmentData.location;
+      enrichmentData.target_customer = overview.target_customer || enrichmentData.target_customer;
+      enrichmentData.market_vertical = overview.market_vertical || enrichmentData.market_vertical;
+      enrichmentData.website_keywords = overview.website_keywords || enrichmentData.website_keywords;
+      Object.assign(allConfidence, overview.confidence);
+    }
+  } catch (error) {
+    console.warn(`      Query 1 failed:`, error instanceof Error ? error.message : String(error));
+  }
+
+  // Query 2: Funding Information
+  try {
+    console.log(`      Query 2/4: Funding information...`);
+    const fundingQuery = `${companyName} funding raised investment round`;
+    const fundingResults = await searchWeb(fundingQuery);
+    if (fundingResults.length > 0) {
+      const funding = await extractFundingDataWithLLM(fundingResults, companyName);
+      enrichmentData.funding_stage = funding.funding_stage || enrichmentData.funding_stage;
+      enrichmentData.funding_date = funding.funding_date || enrichmentData.funding_date;
+      // Note: funding_amount is handled separately to avoid overwriting TechCrunch data
+      Object.assign(allConfidence, funding.confidence);
+    }
+  } catch (error) {
+    console.warn(`      Query 2 failed:`, error instanceof Error ? error.message : String(error));
+  }
+
+  // Query 3: Team Information
+  try {
+    console.log(`      Query 3/4: Team & founders...`);
+    const teamQuery = `${companyName} founder CEO team LinkedIn`;
+    const teamResults = await searchWeb(teamQuery);
+    if (teamResults.length > 0) {
+      const team = await extractTeamDataWithLLM(teamResults, companyName);
+      enrichmentData.founder_names = team.founder_names || enrichmentData.founder_names;
+      enrichmentData.founder_linkedin = team.founder_linkedin || enrichmentData.founder_linkedin;
+      enrichmentData.founder_backgrounds = team.founder_backgrounds || enrichmentData.founder_backgrounds;
+      enrichmentData.team_size = team.team_size || enrichmentData.team_size;
+      Object.assign(allConfidence, team.confidence);
+    }
+  } catch (error) {
+    console.warn(`      Query 3 failed:`, error instanceof Error ? error.message : String(error));
+  }
+
+  // Query 4: Jobs & Skills (with fallback if no job listings)
+  try {
+    console.log(`      Query 4/4: Jobs & required skills...`);
+    const jobsQuery = `${companyName} careers jobs hiring open positions`;
+    const jobsResults = await searchWeb(jobsQuery);
+    if (jobsResults.length > 0) {
+      const jobs = await extractJobsAndSkillsWithLLM(jobsResults, companyName);
+      enrichmentData.hiring_roles = jobs.hiring_roles || enrichmentData.hiring_roles;
+      enrichmentData.required_skills = jobs.required_skills || enrichmentData.required_skills;
+      Object.assign(allConfidence, jobs.confidence);
+
+      // If no skills found from job listings, try alternative approach
+      if (!enrichmentData.required_skills || enrichmentData.required_skills.trim() === '') {
+        console.log(`      No skills in job listings, trying alternative query...`);
+        // Fallback: Search for tech/engineering blog posts or tech descriptions
+        const techQuery = `${companyName} engineering blog technology stack architecture`;
+        const techResults = await searchWeb(techQuery);
+        if (techResults.length > 0) {
+          // Try to extract mentioned technologies from engineering content
+          const extractedSkills = extractTechStackRegex(techResults, companyName);
+          if (extractedSkills) {
+            enrichmentData.required_skills = extractedSkills;
+            allConfidence.required_skills = 0.5; // Lower confidence since inferred from blog/general mentions
+            console.log(`      Found skills from tech content: ${extractedSkills.substring(0, 50)}...`);
+          }
+        }
+      }
+    }
+  } catch (error) {
+    console.warn(`      Query 4 failed:`, error instanceof Error ? error.message : String(error));
+  }
+
+  return {
+    ...enrichmentData,
+    confidence: allConfidence,
+  } as EnrichmentData;
+}
+
+/**
  * Comprehensive enrichment (Hybrid: LLM first, regex fallback)
+ * LEGACY: Consider using extractWithMultipleQueries for better accuracy
  */
 export async function extractAllEnrichmentData(
   results: SearchResult[],
@@ -1191,9 +2109,10 @@ export async function extractAllEnrichmentData(
   if (process.env.GEMINI_API_KEY && !geminiQuotaExceeded) {
     try {
       const llmResult = await extractAllEnrichmentDataWithLLM(results, companyName);
-      // Use LLM results if we got meaningful data
-      const hasGoodData = Object.values(llmResult.confidence || {}).some(
-        (conf) => (conf || 0) >= 0.5
+      // Use LLM results if we got meaningful data (validation already filtered low-confidence data)
+      // Check if we have any non-empty fields (validation ensures they meet confidence threshold)
+      const hasGoodData = Object.entries(llmResult).some(
+        ([key, value]) => key !== 'confidence' && value && typeof value === 'string' && value.trim().length > 0
       );
       if (hasGoodData) {
         return llmResult;
@@ -1219,7 +2138,7 @@ export async function extractAllEnrichmentData(
   const industry = extractIndustryFromText(allText);
 
   return {
-    tech_stack: extractTechStack(results, companyName),
+    required_skills: extractTechStack(results, companyName), // Using tech_stack extraction as fallback for required_skills
     target_customer: extractTargetCustomer(results, companyName),
     market_vertical: extractMarketVertical(results, companyName),
     team_size: extractTeamSize(results, companyName),
@@ -1230,6 +2149,7 @@ export async function extractAllEnrichmentData(
     location: location,
     industry: industry,
     funding_stage: '', // Regex fallback doesn't extract funding_stage (requires LLM)
+    funding_date: '', // Regex fallback doesn't extract funding_date (requires LLM)
     founder_names: founderInfo.founder_names,
     founder_linkedin: founderInfo.founder_linkedin,
     confidence: founderInfo.confidence,

@@ -19,12 +19,12 @@ import { config } from 'dotenv';
 config({ path: resolve(process.cwd(), '.env.local') });
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { 
-  searchWeb, 
-  extractFounderInfo, 
-  extractJobOpenings, 
+import {
+  searchWeb,
+  extractFounderInfo,
+  extractJobOpenings,
   extractCompanyWebsite,
-  extractAllEnrichmentData,
+  extractWithMultipleQueries,
   isGeminiQuotaExceeded
 } from './web_search_agent';
 import {
@@ -61,15 +61,17 @@ interface EnrichedData {
   description?: string;
   funding_amount?: string;
   funding_stage?: string;
+  funding_date?: string;
   location?: string;
   industry?: string;
   company_logo?: string;
   yc_link?: string;
-  tech_stack?: string;
+  required_skills?: string;
   target_customer?: string;
   market_vertical?: string;
   team_size?: string;
   founder_backgrounds?: string;
+  website_keywords?: string;
 }
 
 /**
@@ -83,71 +85,53 @@ async function searchWebForStartup(startup: StartupRecord): Promise<EnrichedData
   const companyName = startup.name;
   const existingWebsite = startup.website;
   const articleContent = startup.techcrunch_article_content || '';
-  
+
   console.log(`  🔍 Searching web for: ${companyName}`);
-  
+
   const enrichedData: EnrichedData = {};
-  
-  // Primary approach: Comprehensive LLM extraction (Cursor-like - one search, extract everything)
-  // This is more efficient and accurate than multiple targeted searches
-  // Note: Will automatically fall back to regex if Gemini quota exceeded
-  // Skip LLM if we know quota is exceeded
+
+  // NEW APPROACH: Multi-Query Targeted Extraction
+  // Performs 4 specialized searches for better accuracy:
+  // 1. Company overview (website, industry, location)
+  // 2. Funding information (amount, stage, date)
+  // 3. Team information (founders, backgrounds, size)
+  // 4. Jobs & Skills (hiring roles, required skills from job postings)
+
   const shouldUseLLM = process.env.GEMINI_API_KEY && !isGeminiQuotaExceeded();
-  
+
   if (shouldUseLLM) {
     try {
-      // Build a comprehensive query that will capture all information
-      // Include description keywords if available to improve search relevance
-      let generalQuery = `${companyName}`;
-      if (startup.description) {
-        // Extract key terms from description (first 50 chars) to improve search
-        const descKeywords = startup.description
-          .split(/\s+/)
-          .slice(0, 5)
-          .filter(w => w.length > 3)
-          .join(' ');
-        if (descKeywords) {
-          generalQuery += ` ${descKeywords}`;
-        }
-      }
-      generalQuery += ` startup founders team website`;
-      
-      console.log(`    Using comprehensive extraction: ${generalQuery}`);
-      const allResults = await searchWeb(generalQuery);
-      
-      if (allResults.length > 0) {
-        console.log(`    Found ${allResults.length} search results, extracting with LLM...`);
-        const comprehensive = await extractAllEnrichmentData(allResults, companyName);
-        
-        // Map comprehensive results to EnrichedData format
-        const result: EnrichedData = {
-          founder_names: comprehensive.founder_names || '',
-          founder_linkedin: comprehensive.founder_linkedin || '',
-          website: comprehensive.website || '',
-          location: comprehensive.location || '',
-          industry: comprehensive.industry || '',
-          funding_stage: comprehensive.funding_stage || '',
-          job_openings: comprehensive.hiring_roles || '',
-          tech_stack: comprehensive.tech_stack || '',
-          target_customer: comprehensive.target_customer || '',
-          market_vertical: comprehensive.market_vertical || '',
-          team_size: comprehensive.team_size || '',
-          founder_backgrounds: comprehensive.founder_backgrounds || '',
-        };
-        
-        // Log what we found
-        const foundFields = Object.entries(result)
-          .filter(([_, value]) => value && value.trim())
-          .map(([key, _]) => key)
-          .join(', ');
-        console.log(`    ✅ Extracted: ${foundFields || 'none'}`);
-        
-        return result;
-      } else {
-        console.warn(`    ⚠️  No search results found, falling back to targeted searches`);
-      }
+      console.log(`    Using multi-query targeted extraction...`);
+      const comprehensive = await extractWithMultipleQueries(companyName);
+
+      // Map comprehensive results to EnrichedData format
+      const result: EnrichedData = {
+        founder_names: comprehensive.founder_names || '',
+        founder_linkedin: comprehensive.founder_linkedin || '',
+        website: comprehensive.website || '',
+        location: comprehensive.location || '',
+        industry: comprehensive.industry || '',
+        funding_stage: comprehensive.funding_stage || '',
+        funding_date: comprehensive.funding_date || '',
+        job_openings: comprehensive.hiring_roles || '',
+        required_skills: comprehensive.required_skills || '',
+        target_customer: comprehensive.target_customer || '',
+        market_vertical: comprehensive.market_vertical || '',
+        team_size: comprehensive.team_size || '',
+        founder_backgrounds: comprehensive.founder_backgrounds || '',
+        website_keywords: comprehensive.website_keywords || '',
+      };
+
+      // Log what we found
+      const foundFields = Object.entries(result)
+        .filter(([_, value]) => value && value.trim())
+        .map(([key, _]) => key)
+        .join(', ');
+      console.log(`    ✅ Extracted: ${foundFields || 'none'}`);
+
+      return result;
     } catch (error) {
-      console.warn(`    ⚠️  Comprehensive extraction failed, using targeted searches:`, error instanceof Error ? error.message : String(error));
+      console.warn(`    ⚠️  Multi-query extraction failed, using fallback searches:`, error instanceof Error ? error.message : String(error));
     }
   }
   
@@ -277,13 +261,58 @@ function isPlaceholderValue(value: any, field: string): boolean {
   return false;
 }
 
+/**
+ * Check if a funding amount is a placeholder/default value
+ */
+function isPlaceholderFundingAmount(value: any): boolean {
+  if (!value || typeof value !== 'string') return false;
+  const trimmed = value.trim().toLowerCase();
+  
+  const placeholderAmounts = [
+    '$1.5m',
+    '$1.5 m',
+    '1.5m',
+    '1.5 m',
+    '$1.5 million',
+    '$500k-$2m',
+    'n/a',
+    'tbd',
+    'to be determined',
+  ];
+  
+  return placeholderAmounts.includes(trimmed);
+}
+
+/**
+ * Check if a funding stage is a placeholder (conservative - only obvious placeholders)
+ */
+function isPlaceholderFundingStage(value: any): boolean {
+  if (!value || typeof value !== 'string') return false;
+  const trimmed = value.trim().toLowerCase();
+  
+  const placeholderStages = [
+    'n/a',
+    'na',
+    'tbd',
+    'to be determined',
+    'unknown',
+    'default',
+    'not specified',
+  ];
+  
+  return placeholderStages.includes(trimmed);
+}
+
 function mergeEnrichedData(existing: StartupRecord, enriched: EnrichedData): Partial<StartupRecord> {
   const updates: Partial<StartupRecord> = {};
 
   // Update fields if they're empty/null OR if they look like placeholders
   // This allows overwriting placeholder data with real extracted data
-  if (enriched.founder_names && (isEmptyOrNull(existing.founder_names) || isPlaceholderValue(existing.founder_names, 'founder_names'))) {
-    updates.founder_names = enriched.founder_names;
+  if (enriched.founder_names && enriched.founder_names.trim()) {
+    const shouldUpdate = isEmptyOrNull(existing.founder_names) || isPlaceholderValue(existing.founder_names, 'founder_names');
+    if (shouldUpdate) {
+      updates.founder_names = enriched.founder_names.trim();
+    }
   }
 
   if (enriched.founder_linkedin && (isEmptyOrNull(existing.founder_linkedin) || isPlaceholderValue(existing.founder_linkedin, 'founder_linkedin'))) {
@@ -303,14 +332,45 @@ function mergeEnrichedData(existing: StartupRecord, enriched: EnrichedData): Par
     updates.description = enriched.description;
   }
 
-  // Funding amount: Only update if null/empty (TechCrunch should have this)
-  if (enriched.funding_amount && isEmptyOrNull(existing.funding_amount)) {
-    updates.funding_amount = enriched.funding_amount;
+  // Funding amount: Update if null/empty OR if it's a placeholder value
+  if (enriched.funding_amount && enriched.funding_amount.trim()) {
+    const extractedIsPlaceholder = isPlaceholderFundingAmount(enriched.funding_amount);
+    const existingIsPlaceholder = existing.funding_amount && 
+                                   isPlaceholderFundingAmount(existing.funding_amount);
+    
+    const shouldUpdate = isEmptyOrNull(existing.funding_amount) || 
+                         existingIsPlaceholder;
+    
+    // Only update if extracted value is not also a placeholder
+    if (shouldUpdate && !extractedIsPlaceholder) {
+      updates.funding_amount = enriched.funding_amount.trim();
+      console.log(`      📊 Updating funding_amount: "${existing.funding_amount || 'null'}" → "${enriched.funding_amount.trim()}"`);
+    }
   }
 
-  // Funding stage: Map to round_type column in database, only update if null/empty
-  if (enriched.funding_stage && isEmptyOrNull(existing.round_type)) {
-    updates.round_type = enriched.funding_stage;
+  // Funding stage: Map to round_type column, update if null/empty OR if it's a placeholder
+  if (enriched.funding_stage && enriched.funding_stage.trim()) {
+    const extractedIsPlaceholder = isPlaceholderFundingStage(enriched.funding_stage);
+    const existingIsPlaceholder = existing.round_type && 
+                                   isPlaceholderFundingStage(existing.round_type);
+    
+    const shouldUpdate = isEmptyOrNull(existing.round_type) || 
+                         existingIsPlaceholder;
+    
+    // Additional check: if existing is "Seed" (common default) and we found a more specific stage
+    // AND existing funding amount is placeholder, consider updating
+    const existingIsSeed = existing.round_type?.toLowerCase().trim() === 'seed';
+    const extractedIsMoreSpecific = enriched.funding_stage.trim() !== 'Seed' && 
+                                     enriched.funding_stage.trim().length > 0;
+    const hasPlaceholderFunding = existing.funding_amount && 
+                                   isPlaceholderFundingAmount(existing.funding_amount);
+    
+    // Update if it's a placeholder, or if Seed + placeholder funding + more specific stage found
+    if ((shouldUpdate || (existingIsSeed && extractedIsMoreSpecific && hasPlaceholderFunding)) && 
+        !extractedIsPlaceholder) {
+      updates.round_type = enriched.funding_stage.trim();
+      console.log(`      📊 Updating round_type: "${existing.round_type || 'null'}" → "${enriched.funding_stage.trim()}"`);
+    }
   }
 
   if (enriched.location && isEmptyOrNull(existing.location)) {
@@ -322,24 +382,34 @@ function mergeEnrichedData(existing: StartupRecord, enriched: EnrichedData): Par
   }
 
   // Add new comprehensive fields - update if null/empty
-  if (enriched.tech_stack && isEmptyOrNull(existing.tech_stack)) {
-    updates.tech_stack = enriched.tech_stack;
+  if (enriched.required_skills && enriched.required_skills.trim() && isEmptyOrNull(existing.required_skills)) {
+    updates.required_skills = enriched.required_skills.trim();
   }
 
-  if (enriched.target_customer && isEmptyOrNull(existing.target_customer)) {
-    updates.target_customer = enriched.target_customer;
+  if (enriched.target_customer && enriched.target_customer.trim() && isEmptyOrNull(existing.target_customer)) {
+    updates.target_customer = enriched.target_customer.trim();
   }
 
-  if (enriched.market_vertical && isEmptyOrNull(existing.market_vertical)) {
-    updates.market_vertical = enriched.market_vertical;
+  if (enriched.market_vertical && enriched.market_vertical.trim() && isEmptyOrNull(existing.market_vertical)) {
+    updates.market_vertical = enriched.market_vertical.trim();
   }
 
-  if (enriched.team_size && isEmptyOrNull(existing.team_size)) {
-    updates.team_size = enriched.team_size;
+  if (enriched.team_size && enriched.team_size.trim() && isEmptyOrNull(existing.team_size)) {
+    updates.team_size = enriched.team_size.trim();
   }
 
-  if (enriched.founder_backgrounds && isEmptyOrNull(existing.founder_backgrounds)) {
-    updates.founder_backgrounds = enriched.founder_backgrounds;
+  if (enriched.founder_backgrounds && enriched.founder_backgrounds.trim() && isEmptyOrNull(existing.founder_backgrounds)) {
+    updates.founder_backgrounds = enriched.founder_backgrounds.trim();
+  }
+
+  // Add website_keywords if extracted
+  if (enriched.website_keywords && enriched.website_keywords.trim() && isEmptyOrNull(existing.website_keywords)) {
+    updates.website_keywords = enriched.website_keywords.trim();
+  }
+
+  // Add funding_date if extracted
+  if (enriched.funding_date && enriched.funding_date.trim() && isEmptyOrNull(existing.date)) {
+    updates.date = enriched.funding_date.trim();
   }
 
   // Generate keywords from industry and target_customer if available - only if keywords is null/empty
@@ -369,8 +439,22 @@ async function enrichStartup(startup: StartupRecord): Promise<boolean> {
     // Search web for additional information
     const enrichedData = await searchWebForStartup(startup);
     
+    // Debug: Log what was extracted
+    const extractedFields = Object.entries(enrichedData)
+      .filter(([_, value]) => value && typeof value === 'string' && value.trim().length > 0)
+      .map(([key, value]) => `${key}=${String(value).substring(0, 50)}${String(value).length > 50 ? '...' : ''}`)
+      .join(', ');
+    console.log(`  🔍 Extracted data: ${extractedFields || 'none'}`);
+    
     // Merge enriched data
     const updates = mergeEnrichedData(startup, enrichedData);
+    
+    // Debug: Log what will be updated
+    if (Object.keys(updates).length > 0) {
+      console.log(`  📝 Will update: ${Object.keys(updates).join(', ')}`);
+    } else {
+      console.log(`  ⚠️  No updates to apply - no new data found or all fields already populated`);
+    }
     
     // Create confidence scores for extracted data
     // Simple enricher doesn't have detailed confidence, so we estimate based on source
@@ -400,9 +484,9 @@ async function enrichStartup(startup: StartupRecord): Promise<boolean> {
       const knownColumns = [
         'founder_names', 'founder_emails', 'founder_linkedin',
         'website', 'job_openings', 'description', 'funding_amount',
-        'round_type', 'location', 'industry',
+        'round_type', 'date', 'location', 'industry',
         // New columns (only include if migration has been run)
-        'tech_stack', 'target_customer', 'market_vertical', 
+        'required_skills', 'target_customer', 'market_vertical',
         'team_size', 'founder_backgrounds', 'website_keywords'
       ];
       
@@ -541,13 +625,19 @@ async function enrichStartup(startup: StartupRecord): Promise<boolean> {
 /**
  * Get startups that need enrichment
  */
-async function getStartupsNeedingEnrichment(limit: number = 10): Promise<StartupRecord[]> {
-  const { data, error } = await supabase
+async function getStartupsNeedingEnrichment(limit?: number): Promise<StartupRecord[]> {
+  let query = supabase
     .from('startups')
     .select('*')
     .eq('needs_enrichment', true)
     .in('enrichment_status', ['pending', 'failed', 'needs_review'])
-    .limit(limit);
+    .order('created_at', { ascending: true }); // Process oldest first
+  
+  if (limit) {
+    query = query.limit(limit);
+  }
+  
+  const { data, error } = await query;
   
   if (error) {
     throw error;
@@ -571,28 +661,68 @@ async function enrichStartups(limit?: number) {
   }
   
   console.log(`Found ${startups.length} startups needing enrichment\n`);
+  console.log(`Processing with 2 second delay between startups...\n`);
   
   let successCount = 0;
   let errorCount = 0;
+  const errors: Array<{ name: string; error: string }> = [];
   
   for (let i = 0; i < startups.length; i++) {
     const startup = startups[i];
-    const success = await enrichStartup(startup);
+    const progress = `[${i + 1}/${startups.length}]`;
     
-    if (success) {
-      successCount++;
-    } else {
+    console.log(`\n${progress} Processing: ${startup.name}`);
+    
+    try {
+      const success = await enrichStartup(startup);
+      
+      if (success) {
+        successCount++;
+        console.log(`  ✅ Enriched successfully`);
+      } else {
+        errorCount++;
+        console.log(`  ⚠️  Enrichment completed with warnings`);
+      }
+    } catch (error) {
       errorCount++;
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      errors.push({ name: startup.name, error: errorMsg });
+      console.log(`  ❌ Error: ${errorMsg}`);
     }
     
-    // Add delay to avoid rate limiting
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    // Add delay to avoid rate limiting (except for last item)
+    if (i < startups.length - 1) {
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
   }
   
-  console.log(`\n=== Enrichment Complete ===`);
+  console.log(`\n${'='.repeat(60)}`);
+  console.log(`Enrichment Complete`);
+  console.log(`${'='.repeat(60)}`);
   console.log(`Total processed: ${startups.length}`);
-  console.log(`Successfully enriched: ${successCount}`);
-  console.log(`Errors: ${errorCount}`);
+  console.log(`✅ Successfully enriched: ${successCount}`);
+  console.log(`❌ Errors: ${errorCount}`);
+  
+  if (errors.length > 0) {
+    console.log(`\n⚠️  Errors encountered:`);
+    errors.forEach(({ name, error }) => {
+      console.log(`  - ${name}: ${error}`);
+    });
+  }
+  
+  // Show remaining count if we processed a limited batch
+  if (limit && startups.length >= limit) {
+    const { data: remaining } = await supabase
+      .from('startups')
+      .select('id', { count: 'exact', head: true })
+      .eq('needs_enrichment', true)
+      .in('enrichment_status', ['pending', 'failed', 'needs_review']);
+    
+    if (remaining) {
+      console.log(`\n💡 Note: There may be more startups needing enrichment.`);
+      console.log(`   Run again to process more: npm run enrich-startups ${limit}`);
+    }
+  }
 }
 
 /**

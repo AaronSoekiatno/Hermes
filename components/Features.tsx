@@ -32,7 +32,7 @@ export const Features = () => {
       <div className="w-full max-w-7xl mx-auto px-4">
         <div className="text-center max-w-3xl mx-auto mb-16">
           <h2 className="text-4xl md:text-5xl font-bold text-white mb-4">
-            Why Choose Resume Sender?
+            Why Choose ColdReach?
           </h2>
           <p className="text-lg text-white/80">
             Leverage cutting-edge AI technology to stand out from the crowd

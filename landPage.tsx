@@ -1,7 +1,7 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import { Upload, FileText } from "lucide-react";
+import { Upload, FileText, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { Features } from "@/components/Features";
@@ -236,6 +236,15 @@ export const Hero = () => {
     }
   };
 
+  const handleRemoveFile = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setFile(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-black via-gray-900 to-gray-800">
       {/* Sticky Header */}
@@ -372,10 +381,17 @@ export const Hero = () => {
                     className="flex flex-col items-center justify-center gap-4 w-full min-h-[200px] cursor-pointer group"
                   >
                     {file ? (
-                      <>
+                      <div className="relative flex flex-col items-center gap-4">
+                        <button
+                          onClick={handleRemoveFile}
+                          className="absolute -top-2 -right-2 h-8 w-8 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center transition-all duration-200 border border-white/30"
+                          aria-label="Remove file"
+                        >
+                          <X className="h-4 w-4 text-white" />
+                        </button>
                         <FileText className="h-12 w-12 text-white transition-transform group-hover:scale-110 duration-300" />
                         <span className="text-xl font-semibold text-white">{file.name}</span>
-                      </>
+                      </div>
                     ) : (
                       <>
                         <Upload className="h-12 w-12 text-white/60 transition-all group-hover:text-white group-hover:scale-110 duration-300" />

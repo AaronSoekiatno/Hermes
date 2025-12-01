@@ -303,6 +303,18 @@ export async function saveMatches(
 ) {
   const client = supabaseAdmin || supabase;
 
+  // Delete all existing matches for this candidate first
+  // This ensures we only show the most recent matches from the latest resume upload
+  const { error: deleteError } = await client
+    .from('matches')
+    .delete()
+    .eq('candidate_id', candidateId);
+
+  if (deleteError) {
+    throw new Error(`Failed to clear old matches: ${deleteError.message}`);
+  }
+
+  // Now insert the new matches
   const matchRows = matches.map((match) => ({
     candidate_id: candidateId,
     startup_id: match.startup_id,
@@ -312,9 +324,7 @@ export async function saveMatches(
 
   const { data, error } = await client
     .from('matches')
-    .upsert(matchRows, {
-      onConflict: 'candidate_id,startup_id'
-    })
+    .insert(matchRows)
     .select();
 
   if (error) {

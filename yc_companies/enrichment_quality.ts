@@ -42,8 +42,6 @@ interface StartupRecord {
   location?: string;
   industry?: string;
   tech_stack?: string;
-  target_customer?: string;
-  market_vertical?: string;
   team_size?: string;
   founder_backgrounds?: string;
   [key: string]: any;
@@ -73,8 +71,6 @@ export function calculateEnrichmentQuality(
   // Nice-to-have fields (optional but valuable)
   const optionalFields = [
     'tech_stack',
-    'target_customer',
-    'market_vertical',
     'team_size',
     'founder_backgrounds',
     'funding_stage',

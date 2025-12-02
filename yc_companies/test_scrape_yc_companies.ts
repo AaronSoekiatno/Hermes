@@ -229,3 +229,4 @@ if (require.main === module) {
 
 export { testScrapeCompany, runTests };
 
+

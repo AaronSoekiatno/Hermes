@@ -782,36 +782,6 @@ function validateTechStack(value: string, confidence: number, minConfidence: num
   return validTechs.length > 0 ? validTechs.join(', ') : '';
 }
 
-/**
- * Validate target customer
- */
-function validateTargetCustomer(value: string, confidence: number, minConfidence: number): string {
-  if (confidence < minConfidence) return '';
-  if (isPlaceholderValue(value, 'target_customer')) return '';
-  
-  const validTargets = [
-    'Enterprise', 'SMBs', 'Small Businesses', 'Consumers', 'Developers',
-    'Startups', 'B2B', 'B2C', 'B2B2C', 'B2G'
-  ];
-  
-  const lower = value.trim();
-  const isValid = validTargets.some(target => target.toLowerCase() === lower.toLowerCase());
-  
-  return isValid ? value.trim() : '';
-}
-
-/**
- * Validate market vertical
- */
-function validateMarketVertical(value: string, confidence: number, minConfidence: number): string {
-  if (confidence < minConfidence) return '';
-  if (isPlaceholderValue(value, 'market_vertical')) return '';
-  
-  // Must contain industry and subcategory separated by dash or colon
-  if (value.trim().length < 5) return '';
-  
-  return value.trim();
-}
 
 /**
  * Validate team size
@@ -968,8 +938,6 @@ async function extractCompanyOverviewWithLLM(
   website: string;
   industry: string;
   location: string;
-  target_customer: string;
-  market_vertical: string;
   website_keywords: string;
   confidence: ExtractionConfidence;
 }> {
@@ -999,15 +967,11 @@ Return ONLY valid JSON (no markdown):
   "website": "Official domain EXPLICITLY mentioned (e.g., 'example.com'), or empty",
   "industry": "Primary industry EXPLICITLY stated (e.g., 'Fintech', 'Healthcare'), or empty",
   "location": "City, State/Country EXPLICITLY mentioned (e.g., 'San Francisco, CA'), or empty",
-  "target_customer": "Target segment EXPLICITLY stated (Enterprise, SMBs, Consumers, Developers, B2B, B2C), or empty",
-  "market_vertical": "Specific vertical EXPLICITLY mentioned (e.g., 'Fintech - Payments'), or empty",
   "website_keywords": "Keywords EXPLICITLY used to describe company, or empty",
   "confidence": {
     "website": 0.0-1.0,
     "industry": 0.0-1.0,
     "location": 0.0-1.0,
-    "target_customer": 0.0-1.0,
-    "market_vertical": 0.0-1.0,
     "website_keywords": 0.0-1.0
   }
 }
@@ -1015,7 +979,6 @@ Return ONLY valid JSON (no markdown):
 VALIDATION:
 - website: domain only, not search engines/social media/news sites
 - location: must include city name
-- target_customer: must be one of the listed categories
 - Confidence 0.9+ if stated multiple times, 0.7-0.8 if stated once, 0.0-0.6 if uncertain`;
 
   try {
@@ -1035,8 +998,6 @@ VALIDATION:
       website: validateWebsite(parsed.website || '', confidence.website || 0, minConfidence),
       industry: validateIndustry(parsed.industry || '', confidence.industry || 0, minConfidence),
       location: validateLocation(parsed.location || '', confidence.location || 0, minConfidence),
-      target_customer: validateTargetCustomer(parsed.target_customer || '', confidence.target_customer || 0, minConfidence),
-      market_vertical: validateMarketVertical(parsed.market_vertical || '', confidence.market_vertical || 0, minConfidence),
       website_keywords: validateWebsiteKeywords(parsed.website_keywords || '', confidence.website_keywords || 0, minConfidence),
       confidence,
     };
@@ -1321,8 +1282,6 @@ Extract the following information and return ONLY valid JSON (no markdown, no ex
   "funding_stage": "Funding stage EXPLICITLY mentioned (e.g., 'Seed', 'Series A', 'Series B', 'Series C', 'Pre-Seed', 'Bridge', 'IPO'), or empty string",
   "hiring_roles": "Job titles EXPLICITLY mentioned in job postings/careers pages, or empty string",
   "tech_stack": "Technologies EXPLICITLY mentioned in the results (not inferred), or empty string",
-  "target_customer": "Target customer EXPLICITLY stated (Enterprise, SMBs, Consumers, Developers, Startups, B2B, B2C, B2B2C), or empty string",
-  "market_vertical": "Market vertical EXPLICITLY mentioned (e.g., 'Fintech - Payments', 'Healthcare - Telemedicine'), or empty string",
   "team_size": "Team size EXPLICITLY mentioned with numbers (e.g., '1-10', '10-50', '50-200', '200-500', '500+'), or empty string",
   "founder_backgrounds": "Previous companies/universities EXPLICITLY mentioned, or empty string",
   "website_keywords": "Keywords EXPLICITLY describing the company in results, or empty string",
@@ -1335,8 +1294,6 @@ Extract the following information and return ONLY valid JSON (no markdown, no ex
     "funding_stage": 0.0-1.0,
     "hiring_roles": 0.0-1.0,
     "tech_stack": 0.0-1.0,
-    "target_customer": 0.0-1.0,
-    "market_vertical": 0.0-1.0,
     "team_size": 0.0-1.0,
     "founder_backgrounds": 0.0-1.0,
     "website_keywords": 0.0-1.0
@@ -1352,7 +1309,6 @@ STRICT EXTRACTION RULES:
 - For funding_stage: Only extract if funding stage is EXPLICITLY mentioned (not inferred from batch or other info)
 - For hiring_roles: Only extract if specific job titles are EXPLICITLY mentioned in job postings
 - For tech_stack: Only list technologies EXPLICITLY mentioned in the results. Do NOT infer based on industry
-- For target_customer: Only extract if EXPLICITLY stated. Do NOT infer from business model
 - For team_size: Only extract if a specific number or range is EXPLICITLY mentioned
 - For founder_backgrounds: Only extract if previous companies/universities are EXPLICITLY mentioned
 - For website_keywords: Only extract keywords EXPLICITLY used to describe the company
@@ -1437,18 +1393,6 @@ VALIDATION:
       tech_stack = validateTechStack(tech_stack, confidence.tech_stack || 0, minConfidence);
     }
     
-    // Validate target customer
-    let target_customer = parsed.target_customer || '';
-    if (target_customer) {
-      target_customer = validateTargetCustomer(target_customer, confidence.target_customer || 0, minConfidence);
-    }
-    
-    // Validate market vertical
-    let market_vertical = parsed.market_vertical || '';
-    if (market_vertical) {
-      market_vertical = validateMarketVertical(market_vertical, confidence.market_vertical || 0, minConfidence);
-    }
-    
     // Validate team size
     let team_size = parsed.team_size || '';
     if (team_size) {
@@ -1477,8 +1421,6 @@ VALIDATION:
       funding_date: '', // Not extracted in this deprecated function
       hiring_roles,
       required_skills: '', // Not extracted in this deprecated function (replaces tech_stack)
-      target_customer,
-      market_vertical,
       team_size,
       founder_backgrounds,
       website_keywords,
@@ -1749,88 +1691,6 @@ export function extractTechStack(results: SearchResult[], companyName: string): 
   return extractTechStackRegex(results, companyName);
 }
 
-/**
- * Extract target customer from search results (Regex-based)
- */
-function extractTargetCustomerRegex(results: SearchResult[], companyName: string): string {
-  const allText = results.map(r => `${r.title} ${r.snippet}`).join(' ').toLowerCase();
-  
-  // Common target customer patterns
-  const customerPatterns = [
-    { pattern: /(?:target|serving|focusing on|for)\s+(?:enterprises?|enterprise customers?)/i, value: 'Enterprise' },
-    { pattern: /(?:target|serving|focusing on|for)\s+(?:smbs?|small.?medium businesses?|small businesses?)/i, value: 'SMBs' },
-    { pattern: /(?:target|serving|focusing on|for)\s+(?:consumers?|end.?users?|individuals?)/i, value: 'Consumers' },
-    { pattern: /(?:target|serving|focusing on|for)\s+(?:developers?|devs?)/i, value: 'Developers' },
-    { pattern: /(?:target|serving|focusing on|for)\s+(?:startups?)/i, value: 'Startups' },
-    { pattern: /b2b|business.?to.?business/i, value: 'B2B' },
-    { pattern: /b2c|business.?to.?consumer/i, value: 'B2C' },
-    { pattern: /b2b2c/i, value: 'B2B2C' },
-  ];
-  
-  for (const { pattern, value } of customerPatterns) {
-    if (pattern.test(allText)) {
-      return value;
-    }
-  }
-  
-  return '';
-}
-
-/**
- * Extract target customer (Hybrid: uses regex for now)
- */
-export function extractTargetCustomer(results: SearchResult[], companyName: string): string {
-  return extractTargetCustomerRegex(results, companyName);
-}
-
-/**
- * Extract market vertical (more specific than industry) (Regex-based)
- */
-function extractMarketVerticalRegex(results: SearchResult[], companyName: string): string {
-  const allText = results.map(r => `${r.title} ${r.snippet}`).join(' ').toLowerCase();
-  
-  // Specific verticals within industries
-  const verticals = [
-    // Fintech
-    { keywords: ['payments', 'payment processing', 'payment gateway'], value: 'Fintech - Payments' },
-    { keywords: ['lending', 'loans', 'credit'], value: 'Fintech - Lending' },
-    { keywords: ['banking', 'neobank', 'digital bank'], value: 'Fintech - Banking' },
-    { keywords: ['insurance', 'insurtech'], value: 'Fintech - Insurance' },
-    { keywords: ['trading', 'investing', 'robo-advisor'], value: 'Fintech - Trading/Investing' },
-    // Healthcare
-    { keywords: ['telemedicine', 'telehealth', 'remote healthcare'], value: 'Healthcare - Telemedicine' },
-    { keywords: ['mental health', 'therapy', 'counseling'], value: 'Healthcare - Mental Health' },
-    { keywords: ['pharmacy', 'prescription'], value: 'Healthcare - Pharmacy' },
-    { keywords: ['medical devices', 'medtech'], value: 'Healthcare - Medical Devices' },
-    // SaaS
-    { keywords: ['crm', 'customer relationship'], value: 'SaaS - CRM' },
-    { keywords: ['hr', 'human resources', 'hris'], value: 'SaaS - HR Tech' },
-    { keywords: ['accounting', 'bookkeeping', 'financial software'], value: 'SaaS - Accounting' },
-    { keywords: ['project management', 'collaboration'], value: 'SaaS - Project Management' },
-    // E-commerce
-    { keywords: ['marketplace', 'platform'], value: 'E-commerce - Marketplace' },
-    { keywords: ['d2c', 'direct to consumer'], value: 'E-commerce - D2C' },
-    // AI/ML
-    { keywords: ['computer vision', 'image recognition'], value: 'AI - Computer Vision' },
-    { keywords: ['nlp', 'natural language processing', 'language model'], value: 'AI - NLP' },
-    { keywords: ['recommendation', 'personalization'], value: 'AI - Recommendations' },
-  ];
-  
-  for (const { keywords, value } of verticals) {
-    if (keywords.some(keyword => allText.includes(keyword))) {
-      return value;
-    }
-  }
-  
-  return '';
-}
-
-/**
- * Extract market vertical (Hybrid: uses regex for now)
- */
-export function extractMarketVertical(results: SearchResult[], companyName: string): string {
-  return extractMarketVerticalRegex(results, companyName);
-}
 
 /**
  * Extract team size from search results (Regex-based)
@@ -1965,8 +1825,6 @@ export function extractWebsiteKeywords(results: SearchResult[], companyName: str
  */
 export interface EnrichmentData {
   required_skills: string; // Skills/technologies required in job postings (replaces tech_stack)
-  target_customer: string;
-  market_vertical: string;
   team_size: string;
   founder_backgrounds: string;
   website_keywords: string;
@@ -1990,8 +1848,6 @@ export async function extractWithMultipleQueries(companyName: string): Promise<E
 
   const enrichmentData: Partial<EnrichmentData> = {
     required_skills: '',
-    target_customer: '',
-    market_vertical: '',
     team_size: '',
     founder_backgrounds: '',
     website_keywords: '',
@@ -2017,8 +1873,6 @@ export async function extractWithMultipleQueries(companyName: string): Promise<E
       enrichmentData.website = overview.website || enrichmentData.website;
       enrichmentData.industry = overview.industry || enrichmentData.industry;
       enrichmentData.location = overview.location || enrichmentData.location;
-      enrichmentData.target_customer = overview.target_customer || enrichmentData.target_customer;
-      enrichmentData.market_vertical = overview.market_vertical || enrichmentData.market_vertical;
       enrichmentData.website_keywords = overview.website_keywords || enrichmentData.website_keywords;
       Object.assign(allConfidence, overview.confidence);
     }
@@ -2139,8 +1993,6 @@ export async function extractAllEnrichmentData(
 
   return {
     required_skills: extractTechStack(results, companyName), // Using tech_stack extraction as fallback for required_skills
-    target_customer: extractTargetCustomer(results, companyName),
-    market_vertical: extractMarketVertical(results, companyName),
     team_size: extractTeamSize(results, companyName),
     founder_backgrounds: extractFounderBackgrounds(results, companyName),
     website_keywords: extractWebsiteKeywords(results, companyName),

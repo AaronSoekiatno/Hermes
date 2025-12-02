@@ -67,8 +67,6 @@ interface EnrichedData {
   company_logo?: string;
   yc_link?: string;
   required_skills?: string;
-  target_customer?: string;
-  market_vertical?: string;
   team_size?: string;
   founder_backgrounds?: string;
   website_keywords?: string;
@@ -115,8 +113,6 @@ async function searchWebForStartup(startup: StartupRecord): Promise<EnrichedData
         funding_date: comprehensive.funding_date || '',
         job_openings: comprehensive.hiring_roles || '',
         required_skills: comprehensive.required_skills || '',
-        target_customer: comprehensive.target_customer || '',
-        market_vertical: comprehensive.market_vertical || '',
         team_size: comprehensive.team_size || '',
         founder_backgrounds: comprehensive.founder_backgrounds || '',
         website_keywords: comprehensive.website_keywords || '',
@@ -206,7 +202,7 @@ async function searchWebForStartup(startup: StartupRecord): Promise<EnrichedData
  *    - Website, location, industry
  *    - Founders, LinkedIn profiles
  *    - Funding stage (round_type)
- *    - Tech stack, target customer, market vertical
+ *    - Tech stack
  *    - Team size, founder backgrounds
  *    - Job openings
  * 
@@ -386,14 +382,6 @@ function mergeEnrichedData(existing: StartupRecord, enriched: EnrichedData): Par
     updates.required_skills = enriched.required_skills.trim();
   }
 
-  if (enriched.target_customer && enriched.target_customer.trim() && isEmptyOrNull(existing.target_customer)) {
-    updates.target_customer = enriched.target_customer.trim();
-  }
-
-  if (enriched.market_vertical && enriched.market_vertical.trim() && isEmptyOrNull(existing.market_vertical)) {
-    updates.market_vertical = enriched.market_vertical.trim();
-  }
-
   if (enriched.team_size && enriched.team_size.trim() && isEmptyOrNull(existing.team_size)) {
     updates.team_size = enriched.team_size.trim();
   }
@@ -412,12 +400,9 @@ function mergeEnrichedData(existing: StartupRecord, enriched: EnrichedData): Par
     updates.date = enriched.funding_date.trim();
   }
 
-  // Generate keywords from industry and target_customer if available - only if keywords is null/empty
-  if ((enriched.industry || enriched.target_customer) && isEmptyOrNull(existing.keywords)) {
-    const keywordParts = [enriched.industry, enriched.target_customer].filter(Boolean);
-    if (keywordParts.length > 0) {
-      updates.keywords = keywordParts.join(', ');
-    }
+  // Generate keywords from industry if available - only if keywords is null/empty
+  if (enriched.industry && isEmptyOrNull(existing.keywords)) {
+    updates.keywords = enriched.industry;
   }
 
   return updates;
@@ -486,7 +471,7 @@ async function enrichStartup(startup: StartupRecord): Promise<boolean> {
         'website', 'job_openings', 'description', 'funding_amount',
         'round_type', 'date', 'location', 'industry',
         // New columns (only include if migration has been run)
-        'required_skills', 'target_customer', 'market_vertical',
+        'required_skills',
         'team_size', 'founder_backgrounds', 'website_keywords'
       ];
       

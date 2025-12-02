@@ -151,8 +151,6 @@ export function generateEmbeddingText(
   businessType: string | null,
   enrichmentData?: {
     tech_stack?: string | null;
-    target_customer?: string | null;
-    market_vertical?: string | null;
     team_size?: string | null;
     founder_backgrounds?: string | null;
     website_keywords?: string | null;
@@ -172,8 +170,6 @@ export function generateEmbeddingText(
     tags ? `Tags: ${tags}` : '',
     // Enrichment fields
     enrichmentData?.tech_stack ? `Tech Stack: ${enrichmentData.tech_stack}` : '',
-    enrichmentData?.target_customer ? `Target Customer: ${enrichmentData.target_customer}` : '',
-    enrichmentData?.market_vertical ? `Market Vertical: ${enrichmentData.market_vertical}` : '',
     enrichmentData?.team_size ? `Team Size: ${enrichmentData.team_size}` : '',
     enrichmentData?.founder_backgrounds ? `Founder Backgrounds: ${enrichmentData.founder_backgrounds}` : '',
     enrichmentData?.website_keywords ? `Website Keywords: ${enrichmentData.website_keywords}` : '',
@@ -1396,8 +1392,6 @@ async function scrapeAndIngestTechCrunch() {
           enrichment_status: 'pending',
           // Enrichment fields (will be populated by web_search_agent.ts)
           tech_stack: null,
-          target_customer: null,
-          market_vertical: null,
           team_size: null,
           founder_backgrounds: null,
           website_keywords: null,
@@ -1435,8 +1429,6 @@ async function scrapeAndIngestTechCrunch() {
             location: '',
             website: '',
             tech_stack: '',
-            target_customer: '',
-            market_vertical: '',
             team_size: '',
             founder_backgrounds: '',
             website_keywords: '',

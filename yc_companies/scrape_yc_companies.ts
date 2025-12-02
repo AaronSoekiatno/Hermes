@@ -41,6 +41,10 @@ interface YCPageData {
   }>;
   location: string;
   oneLineSummary: string;
+  fundingAmount?: string; // Funding amount (e.g., "US$ 500.0K", "$20M")
+  roundType?: string; // Funding round type (e.g., "Pre seed", "Seed", "Series A")
+  fundingDate?: string; // Funding date (e.g., "Oct 9, 2025", "2025-10-09")
+  linkedInCompanyUrl?: string | null; // Constructed LinkedIn URL for future enrichment
 }
 
 interface EnrichedYCData extends YCCompany {
@@ -112,12 +116,37 @@ function loadCompaniesFromCSV(csvPath: string): YCCompany[] {
  * Get all CSV files from yc_companies directory
  */
 function getAllYCCsvFiles(): string[] {
-  const ycDir = resolve(process.cwd(), 'yc_companies');
+  // Check if we're already in yc_companies directory or if we need to navigate to it
+  const currentDir = process.cwd();
+  const ycDir = currentDir.endsWith('yc_companies') ? currentDir : resolve(currentDir, 'yc_companies');
+
   const files = fs.readdirSync(ycDir);
   return files
     .filter(file => (file.startsWith('ycombinator') || file.toLowerCase().includes('yc')) && file.endsWith('.csv'))
     .map(file => resolve(ycDir, file))
     .sort(); // Sort for consistent ordering
+}
+
+/**
+ * Construct LinkedIn company URL from website domain
+ * NOTE: We store this URL for future enrichment via APIs, but don't scrape it directly
+ */
+function constructLinkedInCompanyUrl(website: string): string | null {
+  if (!website) return null;
+
+  try {
+    const url = new URL(website);
+    const hostname = url.hostname.replace('www.', '');
+    const domainParts = hostname.split('.');
+    const domain = domainParts[0];
+
+    // LinkedIn company URL format: linkedin.com/company/{company-slug}/
+    const linkedInUrl = `https://www.linkedin.com/company/${domain.toLowerCase()}`;
+    console.log(`   🔗 Constructed LinkedIn URL: ${linkedInUrl}`);
+    return linkedInUrl;
+  } catch (error) {
+    return null;
+  }
 }
 
 /**
@@ -276,7 +305,8 @@ async function scrapeYCCompanyPage(page: Page, ycUrl: string): Promise<YCPageDat
             founderCard = nameEl.parentElement;
           }
           
-          // Extract description
+          // Extract description/background
+          // Use broader extraction when we're in Active Founders section - don't require "founder" keyword
           let description = '';
           
           // Try to find description in prose div
@@ -302,22 +332,105 @@ async function scrapeYCCompanyPage(page: Page, ycUrl: string): Promise<YCPageDat
             const paragraphs = founderCard.querySelectorAll('p');
             for (const p of Array.from(paragraphs)) {
               const pText = p.textContent?.trim() || '';
-              // Description is usually longer and contains "Co-founder" or similar
-              if (pText.length > 30 && 
-                  pText.length < 1000 && 
-                  (pText.includes('Co-founder') || pText.includes('Founder') || 
-                   pText.includes('Prior') || pText.includes('studied') || 
-                   pText.includes('worked') || pText.includes('led'))) {
-                description = pText;
-                break;
+              // If we're in Active Founders section, be more lenient - accept any descriptive text
+              const isInFoundersSection = foundersHeading && foundersContainer && foundersContainer.contains(nameEl);
+              
+              if (pText.length > 20 && pText.length < 1000) {
+                // Check if it looks like a bio/description
+                const looksLikeBio = pText.includes('Prior') || 
+                                    pText.includes('studied') || 
+                                    pText.includes('worked') || 
+                                    pText.includes('led') ||
+                                    pText.includes('Building') ||
+                                    pText.includes('Previously') ||
+                                    pText.includes('Experience') ||
+                                    pText.match(/\b(at|from|co-founded|founded)\b/i);
+                
+                // If in Active Founders section, accept any descriptive text
+                // Otherwise, require "founder" keyword or bio-like content
+                if (isInFoundersSection && looksLikeBio) {
+                  description = pText;
+                  break;
+                } else if (!isInFoundersSection && 
+                          (pText.includes('Co-founder') || pText.includes('Founder') || looksLikeBio)) {
+                  description = pText;
+                  break;
+                }
               }
             }
           }
           
+          // Additional fallback: Search in parent containers if we're in Active Founders section
+          if (!description && founderCard && foundersHeading && foundersContainer) {
+            let searchContainer: Element | null = founderCard.parentElement;
+            let searchAttempts = 0;
+            
+            while (!description && searchContainer && searchAttempts < 3) {
+              const paragraphs = searchContainer.querySelectorAll('p');
+              for (const p of Array.from(paragraphs)) {
+                const pText = p.textContent?.trim() || '';
+                // Accept any descriptive text near the founder name in Active Founders section
+                if (pText.length > 20 && pText.length < 1000 && 
+                    (pText.includes('Building') || pText.includes('Prior') || 
+                     pText.includes('studied') || pText.match(/\b(at|from)\b/i))) {
+                  description = pText;
+                  break;
+                }
+              }
+              searchContainer = searchContainer.parentElement;
+              searchAttempts++;
+            }
+          }
+          
           // Extract LinkedIn link - look for LinkedIn link near this founder card
+          // Use broader search when we're in the Active Founders section
           let linkedIn = '';
           if (founderCard) {
-            const linkedInLink = founderCard.querySelector('a[href*="linkedin.com"]') as HTMLAnchorElement;
+            // First try in the founder card itself
+            let linkedInLink = founderCard.querySelector('a[href*="linkedin.com"]') as HTMLAnchorElement;
+            
+            // If not found, search in parent containers (broader search)
+            if (!linkedInLink && foundersHeading) {
+              let searchContainer: Element | null = founderCard.parentElement;
+              let searchAttempts = 0;
+              while (!linkedInLink && searchContainer && searchAttempts < 5) {
+                linkedInLink = searchContainer.querySelector('a[href*="linkedin.com"]') as HTMLAnchorElement;
+                searchContainer = searchContainer.parentElement;
+                searchAttempts++;
+              }
+            }
+            
+            // If still not found and we're in Active Founders section, search more broadly
+            if (!linkedInLink && foundersHeading && foundersContainer) {
+              // Look for LinkedIn links near this name element in the founders container
+              const nameElementParent = nameEl.parentElement;
+              if (nameElementParent) {
+                // Search in siblings and nearby elements
+                const allLinks = foundersContainer.querySelectorAll('a[href*="linkedin.com"]');
+                if (allLinks.length > 0) {
+                  // Find the closest LinkedIn link to this name element
+                  let closestLink: HTMLAnchorElement | null = null;
+                  let closestDistance = Infinity;
+                  
+                  allLinks.forEach(link => {
+                    const linkEl = link as HTMLAnchorElement;
+                    const namePos = Array.from(nameEl.parentElement?.children || []).indexOf(nameEl.parentElement || nameEl);
+                    const linkPos = Array.from(linkEl.parentElement?.children || []).indexOf(linkEl);
+                    const distance = Math.abs(linkPos - namePos);
+                    
+                    if (distance < closestDistance) {
+                      closestDistance = distance;
+                      closestLink = linkEl;
+                    }
+                  });
+                  
+                  if (closestLink && closestDistance < 10) {
+                    linkedInLink = closestLink;
+                  }
+                }
+              }
+            }
+            
             if (linkedInLink) {
               linkedIn = linkedInLink.href;
             }
@@ -330,12 +443,28 @@ async function scrapeYCCompanyPage(page: Page, ycUrl: string): Promise<YCPageDat
           if (fullName.split(/\s+/).length < 2) return;
           if (fullName === fullName.toUpperCase() && fullName.length > 10) return; // Likely company name
           
-          // Only include if description mentions "founder" or we're in the Active Founders section
-          const isInFoundersSection = foundersHeading && 
-            (foundersContainer?.contains(nameEl) || false);
-          const hasFounderDescription = description.toLowerCase().includes('founder') || 
-                                       description.toLowerCase().includes('co-founder');
+          // Check if we're in the Active Founders section
+          // Use more lenient check - if we found the heading and this name element is anywhere after it, trust it
+          let isInFoundersSection = false;
+          if (foundersHeading && foundersContainer) {
+            // Check if nameEl is a descendant of foundersContainer
+            isInFoundersSection = foundersContainer.contains(nameEl);
+            
+            // Also check if nameEl comes after foundersHeading in the DOM (broader check)
+            if (!isInFoundersSection) {
+              const namePos = Array.from(document.querySelectorAll('*')).indexOf(nameEl as Element);
+              const headingPos = Array.from(document.querySelectorAll('*')).indexOf(foundersHeading);
+              isInFoundersSection = namePos > headingPos && namePos < headingPos + 50; // Within 50 elements after heading
+            }
+          }
           
+          const hasFounderDescription = description && (
+            description.toLowerCase().includes('founder') || 
+            description.toLowerCase().includes('co-founder')
+          );
+          
+          // If we're in the Active Founders section, trust it - don't require "founder" in description
+          // This fixes cases like mlop where description doesn't mention "founder" but we're clearly in the right section
           if (!isInFoundersSection && !hasFounderDescription) return;
           
           // Split name into first and last
@@ -362,7 +491,109 @@ async function scrapeYCCompanyPage(page: Page, ycUrl: string): Promise<YCPageDat
         });
       }
       
-      // Fallback: If still no founders found, try finding by LinkedIn links
+      // Enhanced Fallback 1: If we found Active Founders heading but no founders, use text-based extraction
+      if (data.founders.length === 0 && foundersHeading) {
+        // Get all elements after the heading
+        const allElements = Array.from(document.querySelectorAll('*'));
+        const headingIndex = allElements.indexOf(foundersHeading);
+        
+        // Look at elements after the heading (within reasonable range)
+        const candidateElements = allElements.slice(headingIndex + 1, headingIndex + 100);
+        
+        for (const element of candidateElements) {
+          // Look for divs or sections that might contain founder info
+          if (element.tagName === 'DIV' || element.tagName === 'SECTION') {
+            const text = element.textContent?.trim() || '';
+            
+            // Extract potential names using regex
+            // Pattern: "First Last" or "First Middle Last" - capitalized words
+            const nameMatches = text.match(/\b([A-Z][a-z]+\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b/g);
+            
+            if (nameMatches) {
+              for (const match of nameMatches) {
+                const potentialName = match.trim();
+                const nameParts = potentialName.split(/\s+/);
+                
+                // Validate it looks like a name
+                if (nameParts.length >= 2 && nameParts.length <= 4 && 
+                    potentialName.length >= 3 && potentialName.length <= 100) {
+                  
+                  // Skip if it's the company name
+                  if (potentialName.toLowerCase() === companyName) continue;
+                  // Skip common words
+                  const commonWords = ['Active', 'Founders', 'Founder', 'Company', 'Location', 'Team', 'Size'];
+                  if (commonWords.some(word => potentialName.toLowerCase().includes(word.toLowerCase()))) continue;
+                  
+                  // Look for LinkedIn link in this element or nearby
+                  let linkedIn = '';
+                  const linkedInLink = element.querySelector('a[href*="linkedin.com/in/"]') as HTMLAnchorElement;
+                  if (linkedInLink) {
+                    linkedIn = linkedInLink.href;
+                  } else {
+                    // Search more broadly in nearby elements
+                    const allLinkedInLinks = Array.from(document.querySelectorAll('a[href*="linkedin.com/in/"]'));
+                    for (const link of allLinkedInLinks) {
+                      const linkElement = link as HTMLAnchorElement;
+                      // Check if link is near this element (within reasonable distance)
+                      const linkContainer = linkElement.closest('div, section, article');
+                      const nameContainer = element.closest('div, section, article');
+                      if (linkContainer && nameContainer && 
+                          (linkContainer === nameContainer || linkContainer.contains(nameContainer) || nameContainer.contains(linkContainer))) {
+                        linkedIn = linkElement.href;
+                        break;
+                      }
+                    }
+                  }
+                  
+                  // Extract description/background from this element or nearby
+                  let description = '';
+                  const paragraphs = element.querySelectorAll('p');
+                  for (const p of Array.from(paragraphs)) {
+                    const pText = p.textContent?.trim() || '';
+                    // Accept any descriptive text that looks like a bio
+                    if (pText.length > 20 && pText.length < 1000 && 
+                        pText !== potentialName &&
+                        (pText.includes('Building') || pText.includes('Prior') || 
+                         pText.includes('studied') || pText.match(/\b(at|from|worked)\b/i))) {
+                      description = pText;
+                      break;
+                    }
+                  }
+                  
+                  // Also try div text content
+                  if (!description) {
+                    const divText = element.textContent?.trim() || '';
+                    // Extract description if it's separate from the name
+                    const lines = divText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+                    for (const line of lines) {
+                      if (line !== potentialName && line.length > 20 && line.length < 500 &&
+                          (line.includes('Building') || line.includes('Prior') || 
+                           line.match(/\b(at|from|studied|worked)\b/i))) {
+                        description = line;
+                        break;
+                      }
+                    }
+                  }
+                  
+                  const founderKey = linkedIn || potentialName.toLowerCase();
+                  
+                  if (!seenFounders.has(founderKey)) {
+                    seenFounders.add(founderKey);
+                    data.founders.push({
+                      firstName: nameParts[0],
+                      lastName: nameParts.slice(1).join(' '),
+                      linkedIn,
+                      description: description || undefined,
+                    });
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      
+      // Fallback 2: If still no founders found, try finding by LinkedIn links
       if (data.founders.length === 0) {
         const allLinkedInLinks = document.querySelectorAll('a[href*="linkedin.com/in/"]');
         
@@ -554,7 +785,91 @@ async function scrapeYCCompanyPage(page: Page, ycUrl: string): Promise<YCPageDat
       }
 
       // ============================================
-      // 6. EXTRACT ONE-LINE SUMMARY / DESCRIPTION
+      // 6. EXTRACT FUNDING DATA
+      // ============================================
+      // Look for funding information (LinkedIn-style pattern)
+      try {
+        // Pattern 1: Look for funding amount in text-display-lg class (LinkedIn pattern)
+        const fundingAmountEl = document.querySelector('p.text-display-lg, p[class*="text-display-lg"]') as HTMLElement;
+        if (fundingAmountEl) {
+          const amountText = fundingAmountEl.textContent?.trim() || '';
+          // Match patterns like "US$ 500.0K", "$20M", "$1.5M", etc.
+          const amountMatch = amountText.match(/(?:US\$|USD\$|\$)?\s*([\d.,]+[KMB]?)/i);
+          if (amountMatch) {
+            data.fundingAmount = amountText.trim();
+          }
+        }
+        
+        // Pattern 2: Look for funding round and date in link-styled elements (LinkedIn pattern)
+        const fundingLink = Array.from(document.querySelectorAll('a[class*="link-styled"], a[class*="text-sm"]'))
+          .find(link => {
+            const text = link.textContent?.toLowerCase() || '';
+            return text.includes('seed') || 
+                   text.includes('series') || 
+                   text.includes('pre-seed') ||
+                   text.includes('round') ||
+                   (text.match(/\d{4}/) && (text.includes('jan') || text.includes('feb') || text.includes('mar') || 
+                    text.includes('apr') || text.includes('may') || text.includes('jun') ||
+                    text.includes('jul') || text.includes('aug') || text.includes('sep') ||
+                    text.includes('oct') || text.includes('nov') || text.includes('dec')));
+          }) as HTMLAnchorElement;
+        
+        if (fundingLink) {
+          const fundingText = fundingLink.textContent?.trim() || '';
+          
+          // Extract round type (Pre seed, Seed, Series A, etc.)
+          const roundMatch = fundingText.match(/(pre[- ]?seed|seed|series\s+[a-z]|angel|bridge|convertible|grant)/i);
+          if (roundMatch) {
+            data.roundType = roundMatch[1].trim();
+          }
+          
+          // Extract date (e.g., "Oct 9, 2025", "2025-10-09")
+          const dateMatch = fundingText.match(/([A-Z][a-z]{2,9}\s+\d{1,2},?\s+\d{4}|\d{4}-\d{2}-\d{2})/);
+          if (dateMatch) {
+            data.fundingDate = dateMatch[1].trim();
+          }
+        }
+        
+        // Pattern 3: Look for "Funding" section header and extract nearby data
+        const fundingSection = Array.from(document.querySelectorAll('h2, h3'))
+          .find(el => {
+            const text = el.textContent?.toLowerCase() || '';
+            return text.includes('funding');
+          });
+        
+        if (fundingSection && !data.fundingAmount) {
+          const container = fundingSection.closest('section, div') || fundingSection.parentElement;
+          if (container) {
+            // Look for amount in the container
+            const containerText = container.textContent || '';
+            const amountMatch = containerText.match(/(?:US\$|USD\$|\$)?\s*([\d.,]+[KMB]?)/i);
+            if (amountMatch) {
+              data.fundingAmount = amountMatch[0].trim();
+            }
+            
+            // Look for round type
+            if (!data.roundType) {
+              const roundMatch = containerText.match(/(pre[- ]?seed|seed|series\s+[a-z]|angel|bridge|convertible|grant)/i);
+              if (roundMatch) {
+                data.roundType = roundMatch[1].trim();
+              }
+            }
+            
+            // Look for date
+            if (!data.fundingDate) {
+              const dateMatch = containerText.match(/([A-Z][a-z]{2,9}\s+\d{1,2},?\s+\d{4}|\d{4}-\d{2}-\d{2})/);
+              if (dateMatch) {
+                data.fundingDate = dateMatch[1].trim();
+              }
+            }
+          }
+        }
+      } catch (fundingError) {
+        // Funding extraction failed, continue
+      }
+
+      // ============================================
+      // 7. EXTRACT ONE-LINE SUMMARY / DESCRIPTION
       // ============================================
       // Try multiple strategies to find the company description
       
@@ -611,6 +926,9 @@ async function scrapeYCCompanyPage(page: Page, ycUrl: string): Promise<YCPageDat
           jobPostings: [],
           location: '',
           oneLineSummary: '',
+          fundingAmount: undefined,
+          roundType: undefined,
+          fundingDate: undefined,
         };
       }
     });
@@ -622,21 +940,23 @@ async function scrapeYCCompanyPage(page: Page, ycUrl: string): Promise<YCPageDat
     }
 
     // ============================================
-    // 7. SCRAPE JOBS PAGE IF AVAILABLE
+    // 7. CONSTRUCT LINKEDIN URL (for future enrichment)
     // ============================================
-    // Check if there's a jobs page link
-    const jobsPageUrl = await page.evaluate(() => {
-      const jobsLink = Array.from(document.querySelectorAll('a'))
-        .find(link => {
-          const href = (link as HTMLAnchorElement).href;
-          const text = link.textContent?.toLowerCase() || '';
-          return (href.includes('/jobs') || text.includes('view all jobs') || text.includes('jobs'));
-        });
-      return jobsLink ? (jobsLink as HTMLAnchorElement).href : null;
-    });
+    // Construct LinkedIn company URL from website domain (stored for future API enrichment)
+    pageData.linkedInCompanyUrl = pageData.website ? constructLinkedInCompanyUrl(pageData.website) : null;
 
-    // If jobs page exists and we didn't find many jobs, scrape it
-    if (jobsPageUrl && pageData.jobPostings.length < 3) {
+    // ============================================
+    // 8. SCRAPE COMPANY-SPECIFIC JOBS PAGE
+    // ============================================
+    // Construct the company-specific jobs URL directly
+    // Format: https://www.ycombinator.com/companies/{company-slug}/jobs
+    const companySlug = extractCompanySlug(ycUrl);
+    const jobsPageUrl = companySlug 
+      ? `https://www.ycombinator.com/companies/${companySlug}/jobs`
+      : null;
+
+    // Always try to scrape the company-specific jobs page if we have a valid slug
+    if (jobsPageUrl) {
       console.log(`   📋 Found jobs page, scraping: ${jobsPageUrl}`);
       try {
         await page.goto(jobsPageUrl, { waitUntil: 'networkidle2', timeout: 30000 });
@@ -645,43 +965,80 @@ async function scrapeYCCompanyPage(page: Page, ycUrl: string): Promise<YCPageDat
         const jobsPageData = await page.evaluate(() => {
           const jobs: Array<{ title: string; description: string; location?: string }> = [];
           
-          // Look for "Jobs at [Company]" section
-          const jobsSection = Array.from(document.querySelectorAll('h2, h3'))
+          // Look for "Jobs at [Company]" heading or job listings
+          const jobsHeading = Array.from(document.querySelectorAll('h2, h3'))
             .find(el => el.textContent?.includes('Jobs at'));
           
-          if (jobsSection) {
-            const container = jobsSection.parentElement;
-            // Find all job listings - they're typically in divs or list items
-            const jobElements = container?.querySelectorAll('div, article, li') || [];
+          // Also look for job listings directly - they're often in articles or list items
+          const allJobElements = Array.from(document.querySelectorAll('article, li[class*="job"], div[class*="job"]'));
+          
+          // If we found a heading, look for jobs in that section
+          if (jobsHeading) {
+            const section = jobsHeading.closest('section') || jobsHeading.parentElement;
+            const sectionJobs = section?.querySelectorAll('article, li, div[class*="job"]') || [];
             
-            jobElements.forEach(jobEl => {
-              const text = jobEl.textContent?.trim() || '';
+            sectionJobs.forEach(jobEl => {
+              const fullText = jobEl.textContent?.trim() || '';
               
-              // Look for job title pattern (typically a heading or strong text)
-              const titleEl = jobEl.querySelector('h3, h4, h5, strong, a');
+              // Extract job title - usually the first heading or strong text
+              const titleEl = jobEl.querySelector('h3, h4, h5, strong, a[href*="/jobs/"]');
               const title = titleEl?.textContent?.trim() || '';
               
-              // Look for location pattern
-              const locationMatch = text.match(/([A-Z][a-z]+(?:,\s*[A-Z][a-z]+)*),\s*(United States|US|USA)/);
-              const location = locationMatch ? locationMatch[0] : undefined;
+              // Extract location - pattern like "London, England, GB" or "San Francisco, CA"
+              const locationMatch = fullText.match(/([A-Z][a-zA-Z\s]+(?:,\s*[A-Z][a-zA-Z\s]+)*),\s*(GB|US|USA|CA|NY|TX|England|United States)/);
+              const location = locationMatch ? locationMatch[0].trim() : undefined;
               
-              // Filter out non-job elements
+              // Extract salary if present
+              const salaryMatch = fullText.match(/(\$|£|€)[\d.,]+[KMB]?/);
+              
+              // Filter valid job titles
               if (title && 
                   title.length > 5 && 
                   title.length < 100 &&
-                  !title.includes('View all') &&
-                  !title.includes('Apply Now') &&
-                  !title.includes('Jobs at') &&
-                  !title.includes('Why you should')) {
+                  !title.toLowerCase().includes('view all') &&
+                  !title.toLowerCase().includes('apply now') &&
+                  !title.toLowerCase().includes('jobs at') &&
+                  !title.toLowerCase().includes('why you should')) {
                 
-                // Extract description if available (usually in a paragraph)
+                // Build description from available info
+                let description = '';
                 const descEl = jobEl.querySelector('p');
-                const description = descEl?.textContent?.trim() || '';
+                if (descEl) {
+                  description = descEl.textContent?.trim() || '';
+                }
+                
+                // Add salary to description if found
+                if (salaryMatch && !description.includes(salaryMatch[0])) {
+                  description = salaryMatch[0] + (description ? ' | ' + description : '');
+                }
                 
                 jobs.push({
                   title: title,
                   description: description.substring(0, 500),
                   location: location,
+                });
+              }
+            });
+          }
+          
+          // Also check for standalone job listings if we didn't find many
+          if (jobs.length === 0) {
+            allJobElements.forEach(jobEl => {
+              const titleEl = jobEl.querySelector('h3, h4, h5, strong');
+              const title = titleEl?.textContent?.trim() || '';
+              
+              if (title && title.length > 5 && title.length < 100) {
+                const fullText = jobEl.textContent?.trim() || '';
+                const locationMatch = fullText.match(/([A-Z][a-zA-Z\s]+(?:,\s*[A-Z][a-zA-Z\s]+)*),\s*(GB|US|USA|CA|NY|TX)/);
+                const location = locationMatch ? locationMatch[0].trim() : undefined;
+                
+                const descEl = jobEl.querySelector('p');
+                const description = descEl?.textContent?.trim() || '';
+                
+                jobs.push({
+                  title,
+                  description: description.substring(0, 500),
+                  location,
                 });
               }
             });
@@ -826,10 +1183,10 @@ async function storeYCCompanyInSupabase(company: YCCompany, pageData: YCPageData
         data_source: 'yc',
         needs_enrichment: true,
         enrichment_status: 'pending',
-        // Funding data will be enriched separately
-        funding_amount: null,
-        round_type: null,
-        date: null,
+        // Funding data (extracted from YC page or LinkedIn)
+        funding_amount: toNull(pageData.fundingAmount),
+        round_type: toNull(pageData.roundType),
+        date: toNull(pageData.fundingDate),
       })
       .select()
       .single();
@@ -960,6 +1317,9 @@ async function scrapeYCCompanies() {
         console.log(`   Website: ${pageData.website || 'Not found'}`);
         console.log(`   Team size: ${pageData.teamSize || 'Not found'}`);
         console.log(`   Job postings: ${pageData.jobPostings.length}`);
+        if (pageData.fundingAmount || pageData.roundType || pageData.fundingDate) {
+          console.log(`   💰 Funding: ${pageData.fundingAmount || 'N/A'} | ${pageData.roundType || 'N/A'} | ${pageData.fundingDate || 'N/A'}`);
+        }
 
         // Store in Supabase
         const success = await storeYCCompanyInSupabase(company, pageData);

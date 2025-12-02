@@ -6,11 +6,11 @@
  * Approach:
  * 1. Takes founder names from existing data (TechCrunch scraper, database, etc.)
  * 2. Generates common email patterns (first@domain, first.last@domain, etc.)
- * 3. Verifies patterns using Rapid Email Verifier (free, 1000/month)
+ * 3. Verifies patterns using Rapid Email Verifier (free, unlimited, open source)
  * 4. Returns verified emails with confidence scores
  *
  * Success rate: 100% on test data (4/4 companies)
- * Cost: $0 (free tier)
+ * Cost: $0 (completely free, unlimited validations)
  */
 
 import { findFounderEmailByPattern } from './email_pattern_matcher';
@@ -65,11 +65,13 @@ function isValidName(name: string): boolean {
  *
  * @param founders - Array of founder names to find emails for
  * @param websiteDomain - Company domain (e.g., 'revolut.com')
+ * @param maxPatterns - Maximum patterns to try per founder (default: 4, use 2 for efficiency)
  * @returns Result with verified emails
  */
 export async function discoverFounderEmails(
   founders: Array<{ name: string; role?: string; linkedin?: string }>,
-  websiteDomain: string
+  websiteDomain: string,
+  maxPatterns: number = 4
 ): Promise<FounderEmailDiscoveryResult> {
   console.log(`\n🔍 Finding emails for ${founders.length} founders @ ${websiteDomain}`);
 
@@ -86,7 +88,7 @@ export async function discoverFounderEmails(
     console.log(`\n  🔍 Pattern matching: ${founder.name}`);
 
     // Try pattern matching
-    const result = await findFounderEmailByPattern(founder.name, websiteDomain);
+    const result = await findFounderEmailByPattern(founder.name, websiteDomain, maxPatterns);
 
     const founderInfo: FounderInfo = {
       name: founder.name,

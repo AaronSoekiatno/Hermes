@@ -130,8 +130,9 @@ export function generateEmailPatterns(
 
 /**
  * Verify email using Rapid Email Verifier API
- * Free API: https://rapid-email-verifier.fly.dev
- * Limit: 1000 emails/month, 25ms avg response time
+ * Free, unlimited, open source API: https://rapid-email-verifier.fly.dev
+ * Average response time: ~25ms
+ * Supports batch validation (up to 100 emails at once)
  *
  * API Response:
  * {
@@ -230,10 +231,15 @@ export async function verifyEmailWithRapid(
 /**
  * Find founder email by generating and verifying patterns
  * Returns the first valid email found
+ * 
+ * @param founderName - Full name of the founder
+ * @param companyDomain - Company domain (e.g., 'example.com')
+ * @param maxPatterns - Maximum number of patterns to try (default: 4)
  */
 export async function findFounderEmailByPattern(
   founderName: string,
-  companyDomain: string
+  companyDomain: string,
+  maxPatterns: number = 4
 ): Promise<EmailVerificationResult | null> {
   console.log(`  🔍 Trying pattern matching for: ${founderName} @ ${companyDomain}`);
 
@@ -247,9 +253,9 @@ export async function findFounderEmailByPattern(
 
   console.log(`     Generated ${patterns.length} email patterns`);
 
-  // Try first 4 patterns (most common ones)
+  // Try up to maxPatterns (most common ones first)
   // If none work, mark for manual hunter.io review
-  const maxAttempts = Math.min(4, patterns.length);
+  const maxAttempts = Math.min(maxPatterns, patterns.length);
   
   for (let i = 0; i < maxAttempts; i++) {
     const pattern = patterns[i];
@@ -266,13 +272,12 @@ export async function findFounderEmailByPattern(
       console.log(`     ❌ Invalid: ${result.reason || 'Not deliverable'}`);
     }
 
-    // Small delay to avoid rate limiting (1000/month = ~33/day = ~1.4/hour)
-    // With 4 patterns per founder, we can test ~8 founders per hour safely
-    await new Promise(resolve => setTimeout(resolve, 500));
+    // Small delay to be respectful (API is fast, ~25ms response time)
+    await new Promise(resolve => setTimeout(resolve, 200)); // Reduced delay
   }
 
-  // If we tried 4 patterns and none worked, mark for manual review
-  if (maxAttempts >= 4) {
+  // If we tried multiple patterns and none worked, mark for manual review
+  if (maxAttempts >= 2) {
     console.log(`     ⚠️  No valid email found from ${maxAttempts} patterns - marking for manual hunter.io review`);
     // Return a result indicating manual review needed
     // Use the most likely pattern (first one) as a suggestion

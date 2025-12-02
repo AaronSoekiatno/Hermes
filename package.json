@@ -35,6 +35,7 @@
     "scrape:yc": "tsx yc_companies/scrape_yc_companies.ts",
     "scrape:yc:batch": "tsx yc_companies/scrape_yc_companies.ts",
     "test:scrape-yc": "tsx yc_companies/test_scrape_yc_companies.ts",
+    "re-scrape:missing": "tsx yc_companies/re_scrape_missing_data.ts",
     "funding:fetch": "tsx yc_companies/fetch_funding_data.ts",
     "type-check": "tsc --noEmit",
     "clean": "powershell -ExecutionPolicy Bypass -File scripts/clean.ps1"

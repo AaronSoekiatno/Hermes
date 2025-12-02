@@ -34,6 +34,7 @@ export async function GET(request: NextRequest) {
     );
 
     let user: any = null;
+    let sessionToken: string | null = null;
     
     // If token is provided as query param, use it to get user
     if (tokenParam) {
@@ -41,6 +42,7 @@ export async function GET(request: NextRequest) {
         const { data: { user: userData }, error: tokenError } = await supabase.auth.getUser(tokenParam);
         if (!tokenError && userData) {
           user = userData;
+          sessionToken = tokenParam; // Store the token for passing in state
         }
       } catch (tokenErr) {
         console.error('Token validation error:', tokenErr);
@@ -52,6 +54,7 @@ export async function GET(request: NextRequest) {
       // Try getSession first (reads from cookies)
       const { data: { session }, error: sessionError } = await supabase.auth.getSession();
       user = session?.user;
+      sessionToken = session?.access_token || null;
       
       // If no session, try getUser (makes API call)
       if (!user) {
@@ -73,18 +76,24 @@ export async function GET(request: NextRequest) {
       return NextResponse.redirect(new URL('/?error=please_sign_in&action=connect_gmail', request.url));
     }
 
+    if (!sessionToken) {
+      console.error('No session token available');
+      return NextResponse.redirect(new URL('/?error=session_missing', request.url));
+    }
+
     if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
       console.error('Missing Google OAuth credentials');
       return NextResponse.redirect(new URL('/?error=gmail_config_missing', request.url));
     }
 
     // Request Gmail send permission
+    // Pass both email and session token in state: "email:token"
     const scopes = ['https://www.googleapis.com/auth/gmail.send'];
     const authUrl = oauth2Client.generateAuthUrl({
       access_type: 'offline',
       scope: scopes,
       prompt: 'consent', // Force consent to get refresh token
-      state: user.email, // Pass user email to identify them in callback
+      state: `${user.email}:${sessionToken}`, // Pass email and token to identify and authenticate in callback
     });
 
     return NextResponse.redirect(authUrl);

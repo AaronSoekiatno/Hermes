@@ -79,7 +79,7 @@ export const MatchCard = ({ match }: MatchCardProps) => {
             Visit website
           </a>
         )}
-        {match.startup.founder_emails && match.startup.id && (
+        {match.startup.id && (
           <SendEmailButton
             startupId={match.startup.id}
             matchScore={match.score}
@@ -87,14 +87,6 @@ export const MatchCard = ({ match }: MatchCardProps) => {
             variant="default"
             className="rounded-2xl bg-blue-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-400 shadow-lg hover:shadow-xl"
           />
-        )}
-        {match.startup.founder_emails && !match.startup.id && (
-          <a
-            href={`mailto:${match.startup.founder_emails}`}
-            className="rounded-2xl bg-blue-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-400 shadow-lg hover:shadow-xl"
-          >
-            Email founder
-          </a>
         )}
       </div>
     </article>

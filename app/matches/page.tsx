@@ -10,6 +10,7 @@ interface MatchRecord {
   score: number;
   matched_at: string;
   startup: {
+    id?: string;
     name: string;
     industry: string;
     location: string;
@@ -91,6 +92,11 @@ export default async function MatchesPage() {
   }
 
   const typedMatches = ((matches ?? []) as unknown) as MatchRecord[];
+  const hasMatches = typedMatches.length > 0;
+
+  // Feature flag: when true, keep the blurred "coming soon" overlay;
+  // when false, show the real, interactive matches with SendEmailButton.
+  const showWaitlistOverlay = false;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-900 via-blue-800 to-indigo-900 dark:from-zinc-900 dark:via-zinc-950 dark:to-black">
@@ -100,33 +106,41 @@ export default async function MatchesPage() {
         <div className="text-center space-y-4">
           <h1 className="text-4xl md:text-5xl font-bold text-blue-300">Startups excited to meet you</h1>
           <p className="text-white/90 text-lg">
-            {typedMatches.length > 0
+            {hasMatches
               ? `Congrats you matched with ${typedMatches.length} startup${
                   typedMatches.length === 1 ? '' : 's'
-                }!`
+                }! Review your matches and send personalized emails.`
               : 'Upload a resume to see personalized startup matches.'}
           </p>
         </div>
 
-        {typedMatches.length > 0 ? (
-          <div className="relative">
-            {/* All matches blurred for waitlist */}
-            <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3 blur-md pointer-events-none select-none">
+        {hasMatches ? (
+          showWaitlistOverlay ? (
+            <div className="relative">
+              {/* All matches blurred for waitlist */}
+              <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3 blur-md pointer-events-none select-none">
+                {typedMatches.map((match) => (
+                  <MatchCard key={match.id} match={match} />
+                ))}
+              </div>
+
+              {/* Overlay message */}
+              <div className="absolute inset-0 flex items-center justify-center">
+                <div className="bg-black/80 backdrop-blur-sm border border-white/30 rounded-3xl px-8 py-6 text-center shadow-2xl">
+                  <h3 className="text-2xl font-bold text-white mb-2">More Coming Soon</h3>
+                  <p className="text-white/80 text-sm">
+                    We're creating personalized cold DMs for you
+                  </p>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
               {typedMatches.map((match) => (
                 <MatchCard key={match.id} match={match} />
               ))}
             </div>
-
-            {/* Overlay message */}
-            <div className="absolute inset-0 flex items-center justify-center">
-              <div className="bg-black/80 backdrop-blur-sm border border-white/30 rounded-3xl px-8 py-6 text-center shadow-2xl">
-                <h3 className="text-2xl font-bold text-white mb-2">More Coming Soon</h3>
-                <p className="text-white/80 text-sm">
-                  We're creating personalized cold DMs for you
-                </p>
-              </div>
-            </div>
-          </div>
+          )
         ) : (
           <div className="rounded-3xl border border-white/20 bg-white/10 backdrop-blur-xl p-12 text-center text-white">
             <p className="text-lg text-white">No matches yet. Upload your resume to get started.</p>

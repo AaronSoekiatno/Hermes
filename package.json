@@ -16,6 +16,7 @@
     "delete-test-startups": "tsx scripts/delete-test-startups.ts",
     "test-resume": "tsx scripts/test-resume-parsing.ts",
     "type-check": "tsc --noEmit",
+    "backfill:founders": "tsx scripts/backfill-guessed-founder-emails.ts",
     "clean": "powershell -ExecutionPolicy Bypass -File scripts/clean.ps1"
   },
   "dependencies": {

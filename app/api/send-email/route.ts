@@ -3,6 +3,7 @@ import { google } from 'googleapis';
 import { createServerClient } from '@supabase/ssr';
 import { generateColdEmail } from '@/lib/email-generation';
 import { getCandidate, getStartup } from '@/lib/supabase';
+import { guessFounderEmailFromStartup } from '@/lib/founder-email';
 
 const oauth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
@@ -76,9 +77,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (!startup.founder_emails) {
+    // Decide which email address to use (real or guessed)
+    const { email: targetEmail, isGuessed } = guessFounderEmailFromStartup(startup);
+
+    if (!targetEmail) {
       return NextResponse.json(
-        { error: 'Founder email not available for this startup' },
+        {
+          error:
+            'Founder email not available for this startup and could not be guessed from first name + website.',
+        },
         { status: 400 }
       );
     }
@@ -148,7 +155,7 @@ export async function POST(request: NextRequest) {
 
     // Create email message
     const message = [
-      `To: ${startup.founder_emails}`,
+      `To: ${targetEmail}`,
       `Subject: ${generatedEmail.subject}`,
       'Content-Type: text/plain; charset=utf-8',
       '',
@@ -189,6 +196,32 @@ export async function POST(request: NextRequest) {
           { error: 'Insufficient Gmail permissions. Please reconnect your Gmail account.' },
           { status: 403 }
         );
+      }
+
+      // If we used a guessed founder email and Gmail reports it invalid,
+      // clear the stored founder_emails back to NULL so we don't reuse a bad guess.
+      if (
+        (error.message.toLowerCase().includes('invalid') ||
+          error.message.toLowerCase().includes('address not found')) &&
+        typeof request !== 'undefined'
+      ) {
+        try {
+          const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+          if (serviceRoleKey) {
+            const { createClient } = await import('@supabase/supabase-js');
+            const supabaseAdmin = createClient(
+              process.env.NEXT_PUBLIC_SUPABASE_URL!,
+              serviceRoleKey
+            );
+            const { startupId } = await request.json();
+            await supabaseAdmin
+              .from('startups')
+              .update({ founder_emails: null })
+              .eq('id', startupId);
+          }
+        } catch (clearError) {
+          console.error('Failed to clear invalid founder email:', clearError);
+        }
       }
     }
     

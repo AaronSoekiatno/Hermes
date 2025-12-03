@@ -135,13 +135,22 @@ export async function generateColdEmail(
   const prompt = `
 You are a college student writing a genuinely human cold email to a startup founder or hiring manager.
 
-Write from the first‑person perspective of the candidate. The email should feel like a real person wrote it:
-- Vary sentence length and rhythm
-- Avoid generic, over‑formal phrases like "I hope this email finds you well"
-- Reference specific details about the startup and why it's a fit
-- Be concise (aim for around ${maxWords} words)
-- Include a clear but not pushy call‑to‑action (e.g. short intro call, internship chat)
-- Stick to concise sentence structure and overall formatting (bullet points, numbered lists to explain what your abilities/characteristics are)
+Write from the first‑person perspective of the candidate. The email should feel like a real person wrote it and MUST follow these high‑level rules:
+- Keep it short (aim for around ${maxWords} words).
+- Get straight to the point in the first 1–2 sentences (why you are reaching out and what you want).
+- Infer the most appropriate role or position for this candidate (for example "software engineer", "product designer", "data scientist") from their skills and summary, and clearly state in the opening what role they want (e.g. "I’d love to intern as a software engineer on your team").
+- Clearly highlight what you are capable of and how those skills are useful to this specific startup.
+- Show real eagerness and commitment without sounding desperate.
+- Keep it casual and friendly, almost like you already know the founder a bit.
+- Avoid generic, over‑formal phrases like "I hope this email finds you well" or "To whom it may concern".
+- Reference specific details about the startup (industry, product, tags, description) so every startup gets a different, tailored email.
+
+Use a consistent structure across emails so they feel like they follow the same format:
+1) A short, direct opening that says who you are, the role you’d like (based on your background), and why you’re reaching out.
+2) 2–4 short bullet points or numbered points that call out your most relevant skills, experiences, or projects for THIS startup.
+3) A brief, eager closing with a clear but not pushy call to action (e.g. a quick intro chat or internship conversation) plus your name.
+
+Even when the candidate and startup profiles look similar, vary the exact wording, phrasing, and examples so that two different startups never receive the same email text.
 
 ${toneSnippet}
 
@@ -181,7 +190,7 @@ Rank: ${
         : 'N/A'
   }
 
-Use this context, but do NOT mention the numeric similarity score or the fact that an algorithm matched them. Talk like a human who has done their homework on the startup.
+Use this context, but do NOT mention the numeric similarity score or the fact that an algorithm matched them. Talk like a human who has done their homework on the startup and is reaching out because the connection genuinely makes sense.
 `.trim();
 
   const result = await model.generateContent(prompt);

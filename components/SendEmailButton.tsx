@@ -3,6 +3,14 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
 
 interface SendEmailButtonProps {
   startupId: string;
@@ -16,28 +24,88 @@ interface SendEmailButtonProps {
 export const SendEmailButton = ({
   startupId,
   matchScore,
-  founderEmail,
   onSent,
   variant = "default",
   className,
 }: SendEmailButtonProps) => {
   const [isSending, setIsSending] = useState(false);
+  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [previewSubject, setPreviewSubject] = useState<string | null>(null);
+  const [previewBody, setPreviewBody] = useState<string | null>(null);
   const { toast } = useToast();
 
-  const handleSendEmail = async () => {
-    if (!founderEmail) {
-      toast({
-        title: "No email available",
-        description: "Founder email is not available for this startup.",
-        variant: "destructive",
-      });
-      return;
-    }
+  const handleOpenPreview = async () => {
+    try {
+      setIsPreviewLoading(true);
 
+      const response = await fetch("/api/send-email/preview", {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          startupId,
+          matchScore,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to send email');
+      }
+
+      setPreviewSubject(data.subject);
+      setPreviewBody(data.body);
+      setIsDialogOpen(true);
+
+      toast({
+        title: "Email drafted",
+        description: "Review your personalized email before sending.",
+      });
+    } catch (error) {
+      console.error('Preview email error:', error);
+      
+      const errorMessage = error instanceof Error ? error.message : 'Failed to generate email preview';
+      
+      // Provide helpful error messages
+      if (errorMessage.includes('Unauthorized')) {
+        toast({
+          title: "Please sign in",
+          description: "You need to be signed in to preview and send emails.",
+          variant: "destructive",
+        });
+      } else if (errorMessage.includes('Candidate profile not found')) {
+        toast({
+          title: "No resume found",
+          description: "Upload your resume first to generate personalized emails.",
+          variant: "destructive",
+        });
+      } else if (errorMessage.includes('Founder email not available')) {
+        toast({
+          title: "No founder email",
+          description: "Founder email is not available for this startup.",
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Failed to generate email",
+          description: errorMessage,
+          variant: "destructive",
+        });
+      }
+    } finally {
+      setIsPreviewLoading(false);
+    }
+  };
+
+  const handleSendEmail = async () => {
     try {
       setIsSending(true);
 
-      const response = await fetch('/api/send-email', {
+      const response = await fetch("/api/send-email", {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -93,27 +161,60 @@ export const SendEmailButton = ({
     }
   };
 
-  if (!founderEmail) {
-    return (
+  return (
+    <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
       <Button
-        disabled
+        onClick={handleOpenPreview}
+        disabled={isPreviewLoading}
         variant={variant}
         className={className}
       >
-        Email unavailable
+        {isPreviewLoading ? "Preparing..." : "Preview & Send"}
       </Button>
-    );
-  }
 
-  return (
-    <Button
-      onClick={handleSendEmail}
-      disabled={isSending}
-      variant={variant}
-      className={className}
-    >
-      {isSending ? "Sending..." : "Send Email"}
-    </Button>
+      <DialogContent className="bg-black border-white/20 text-white sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="text-xl font-semibold">
+            Preview your email
+          </DialogTitle>
+          <DialogDescription className="text-white/70">
+            This is the email that will be sent from your Gmail account to the founder. You can review it before sending.
+          </DialogDescription>
+        </DialogHeader>
+
+        {previewSubject && (
+          <div className="space-y-2 text-sm">
+            <div>
+              <span className="font-semibold text-white">Subject:</span>{" "}
+              <span className="text-white/90">{previewSubject}</span>
+            </div>
+            <div className="mt-4">
+              <span className="font-semibold text-white block mb-2">Body:</span>
+              <div className="max-h-80 overflow-y-auto rounded-lg border border-white/20 bg-white/5 p-3 text-sm whitespace-pre-wrap text-white/90">
+                {previewBody}
+              </div>
+            </div>
+          </div>
+        )}
+
+        <DialogFooter className="mt-6">
+          <Button
+            variant="ghost"
+            onClick={() => setIsDialogOpen(false)}
+            className="text-white/70 hover:text-white hover:bg-white/10"
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={handleSendEmail}
+            disabled={isSending}
+            className="bg-blue-500 hover:bg-blue-400 text-white"
+          >
+            {isSending ? "Sending..." : "Send Email"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 };
 

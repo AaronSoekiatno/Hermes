@@ -139,7 +139,6 @@ export const Hero = () => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const reuploadInProgress = useRef(false);
   const checkingGmailRef = useRef(false);
-  const lastCheckedUserRef = useRef<string | null>(null);
   const gmailCheckTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const modalScheduledRef = useRef(false);
 
@@ -331,7 +330,6 @@ export const Hero = () => {
         setHasCheckedGmail(false);
         setShowGmailConnectModal(false);
         checkingGmailRef.current = false;
-        lastCheckedUserRef.current = null;
         modalScheduledRef.current = false;
         if (gmailCheckTimeoutRef.current) {
           clearTimeout(gmailCheckTimeoutRef.current);
@@ -476,6 +474,15 @@ export const Hero = () => {
     //   checkingGmailRef.current = false;
     // }
   };
+
+  // Check Gmail connection when user is available
+  useEffect(() => {
+    // Only check if all conditions are met and we're not already checking
+    if (user && !hasCheckedGmail && !showGmailConnectModal && !gmailConnected && !checkingGmailRef.current) {
+      void checkGmailConnection();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, hasCheckedGmail]);
 
   // Cleanup timeout on unmount
   useEffect(() => {

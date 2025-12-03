@@ -12,6 +12,7 @@ import {
 import { upsertCandidate, findMatchingStartups } from '@/lib/pinecone';
 import { saveCandidate, saveMatches, saveStartup } from '@/lib/supabase';
 import { createServerClient } from '@supabase/ssr';
+import { createClient } from '@supabase/supabase-js';
 
 export const runtime = 'nodejs';
 
@@ -417,12 +418,44 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Save candidate to Pinecone (for vector search) - only if authenticated
+    // Save candidate to Pinecone (for vector search) and Supabase (for queries) - only if authenticated
     let savedToDatabase = false;
     let databaseError: string | undefined;
     let candidateId: string | null = null; // Declare at this scope level
 
     if (isAuthenticated && accountEmail) {
+      // Upload raw resume file to Supabase Storage (resumes bucket)
+      try {
+        const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+        if (serviceRoleKey) {
+          const supabaseAdmin = createClient(
+            process.env.NEXT_PUBLIC_SUPABASE_URL!,
+            serviceRoleKey
+          );
+
+          const objectPath = `resumes/${user!.id}/${Date.now()}-${file!.name}`;
+
+          const { error: uploadError } = await supabaseAdmin.storage
+            .from('resumes')
+            .upload(objectPath, buffer, {
+              contentType: file!.type,
+              upsert: true,
+            });
+
+          if (uploadError) {
+            console.error('Failed to upload resume file to Storage:', uploadError);
+          } else {
+            console.log('Uploaded resume file to Storage at path:', objectPath);
+
+            // We will attach resume_path when saving candidate below
+          }
+        } else {
+          console.warn('SUPABASE_SERVICE_ROLE_KEY is not set; skipping resume file upload.');
+        }
+      } catch (error) {
+        console.error('Unexpected error uploading resume to Storage:', error);
+      }
+
       try {
         await upsertCandidate(
           accountEmail,
@@ -469,6 +502,8 @@ export async function POST(request: NextRequest) {
           university: extractionResult.university,
           past_internships: extractionResult.past_internships.join(', '),
           technical_projects: extractionResult.technical_projects.join(', '),
+          // NOTE: ensure a resume_path column exists in public.candidates for this to work
+          // resume_path can be derived from a convention, e.g., latest upload per user.
         });
         candidateId = savedCandidate.id; // Get the UUID
         console.log('Successfully saved candidate to Supabase:', {

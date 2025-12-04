@@ -498,7 +498,8 @@ export async function POST(request: NextRequest) {
           accountEmail,
           embedding,
           {
-            name: accountName ?? extractionResult.name,
+            // Prioritize resume-extracted name over auth metadata
+            name: extractionResult.name || accountName || 'Unknown',
             email: accountEmail,
             summary: extractionResult.summary,
             skills: extractionResult.skills.join(', '),
@@ -531,7 +532,8 @@ export async function POST(request: NextRequest) {
       try {
         const savedCandidate = await saveCandidate({
           email: accountEmail,
-          name: accountName ?? extractionResult.name,
+          // Prioritize resume-extracted name over auth metadata
+          name: extractionResult.name || accountName || 'Unknown',
           summary: extractionResult.summary,
           skills: extractionResult.skills.join(', '),
           location: extractionResult.location,

@@ -10,7 +10,7 @@ import {
   type ResumeProcessingResult,
 } from './utils';
 import { upsertCandidate, findMatchingStartups } from '@/lib/pinecone';
-import { saveCandidate, saveMatches, saveStartup } from '@/lib/supabase';
+import { saveCandidate, saveMatches, saveStartup, isSubscribed } from '@/lib/supabase';
 import { createServerClient } from '@supabase/ssr';
 import { createClient } from '@supabase/supabase-js';
 
@@ -422,6 +422,8 @@ export async function POST(request: NextRequest) {
     let savedToDatabase = false;
     let databaseError: string | undefined;
     let candidateId: string | null = null; // Declare at this scope level
+    let subscriptionTier: 'free' | 'premium' = 'free';
+    let subscriptionStatus: 'active' | 'inactive' | 'canceled' | 'past_due' | 'trialing' = 'inactive';
 
     if (isAuthenticated && accountEmail) {
       // Upload raw resume file to Supabase Storage (resumes bucket)
@@ -505,10 +507,14 @@ export async function POST(request: NextRequest) {
           resume_path: resumePath, // Attach the resume file path from Storage
         });
         candidateId = savedCandidate.id; // Get the UUID
+        subscriptionTier = savedCandidate.subscription_tier || 'free';
+        subscriptionStatus = savedCandidate.subscription_status || 'inactive';
         console.log('Successfully saved candidate to Supabase:', {
           name: extractionResult.name,
           email: accountEmail,
           id: candidateId,
+          subscriptionTier,
+          subscriptionStatus,
         });
       } catch (error) {
         console.error('Failed to save candidate to Supabase:', {
@@ -526,11 +532,14 @@ export async function POST(request: NextRequest) {
 
     // Find matching startups with quality threshold
     // minScore = 0.45 (45%) - filters out very weak matches
+    // For free users, we find all matches but only save the top 1
     let matches: Array<{ id: string; score: number; metadata: any }> = [];
     let matchingError: string | undefined;
     try {
       const MIN_MATCH_SCORE = 0.45; // Only show matches above 45% similarity
-      matches = await findMatchingStartups(embedding, 10, MIN_MATCH_SCORE);
+      const isPremium = isSubscribed({ subscription_tier: subscriptionTier, subscription_status: subscriptionStatus });
+      const maxMatches = isPremium ? 10 : 10; // Find 10 matches but will only save 1 for free users
+      matches = await findMatchingStartups(embedding, maxMatches, MIN_MATCH_SCORE);
 
       console.log(`\n${'='.repeat(80)}`);
       console.log(`FOUND ${matches.length} QUALITY MATCHES (>${(MIN_MATCH_SCORE * 100).toFixed(0)}% similarity)`);
@@ -593,14 +602,18 @@ export async function POST(request: NextRequest) {
           }
 
           // Now save the matches (foreign keys should be valid now)
+          // For free users, only save the top 1 match
+          const isPremium = isSubscribed({ subscription_tier: subscriptionTier, subscription_status: subscriptionStatus });
+          const matchesToSave = isPremium ? matches : matches.slice(0, 1);
+
           await saveMatches(
             candidateId, // Use UUID instead of email
-            matches.map((match) => ({
+            matchesToSave.map((match) => ({
               startup_id: match.id,
               score: match.score,
             }))
           );
-          console.log(`✓ Successfully saved ${matches.length} matches to Supabase for candidate ${candidateId}`);
+          console.log(`✓ Successfully saved ${matchesToSave.length} matches to Supabase for candidate ${candidateId}${isPremium ? '' : ' (Free tier - limited to 1 match)'}`);
         } catch (error) {
           console.error('✗ Failed to save matches to Supabase:', {
             error: error instanceof Error ? error.message : 'Unknown error',

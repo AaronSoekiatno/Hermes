@@ -1,9 +1,11 @@
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { createServerClient } from '@supabase/ssr';
-import { supabaseAdmin } from '@/lib/supabase';
+import { supabaseAdmin, isSubscribed } from '@/lib/supabase';
 import { MatchCard } from '@/components/MatchCard';
 import { Header } from '@/components/Header';
+import { ManageSubscriptionButton } from '@/components/ManageSubscriptionButton';
+import { UpgradeModalWrapper } from '@/components/UpgradeModalWrapper';
 
 interface MatchRecord {
   id: string;
@@ -52,10 +54,10 @@ export default async function MatchesPage() {
     throw new Error('Supabase service role key is not configured.');
   }
 
-  // First, get the candidate's UUID by email
+  // First, get the candidate's UUID by email and subscription info
   const { data: candidate } = await supabaseAdmin
     .from('candidates')
-    .select('id')
+    .select('id, subscription_tier, subscription_status, stripe_customer_id')
     .eq('email', user.email ?? '')
     .single();
 
@@ -94,9 +96,13 @@ export default async function MatchesPage() {
   const typedMatches = ((matches ?? []) as unknown) as MatchRecord[];
   const hasMatches = typedMatches.length > 0;
 
-  // Feature flag: when true, keep the blurred "coming soon" overlay;
-  // when false, show the real, interactive matches with SendEmailButton.
-  const showWaitlistOverlay = true;
+  // Check subscription status
+  const isPremium = isSubscribed(candidate);
+  const isFree = !isPremium;
+
+  // For free users, limit to 1 match
+  const displayedMatches = isFree ? typedMatches.slice(0, 1) : typedMatches;
+  const hiddenMatchCount = isFree ? Math.max(0, typedMatches.length - 1) : 0;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-900 via-blue-800 to-indigo-900 dark:from-zinc-900 dark:via-zinc-950 dark:to-black">
@@ -104,40 +110,58 @@ export default async function MatchesPage() {
       <section className="py-20">
         <div className="container mx-auto px-4 space-y-10">
         <div className="text-center space-y-4">
-          <h1 className="text-4xl md:text-5xl font-bold text-blue-300">Startups excited to meet you</h1>
+          <div className="flex items-center justify-center gap-4 flex-wrap">
+            <h1 className="text-4xl md:text-5xl font-bold text-blue-300">Startups excited to meet you</h1>
+            {isPremium && (
+              <span className="px-4 py-2 bg-gradient-to-r from-yellow-500 to-orange-500 text-white font-semibold rounded-full text-sm">
+                ✨ Premium
+              </span>
+            )}
+          </div>
           <p className="text-white/90 text-lg">
             {hasMatches
-              ? `Congrats! You matched with ${typedMatches.length} startup${
-                  typedMatches.length === 1 ? '' : 's'
-                }! Review your matches and send personalized emails.`
+              ? isPremium
+                ? `Congrats! You matched with ${typedMatches.length} startup${
+                    typedMatches.length === 1 ? '' : 's'
+                  }! Review your matches and send personalized emails.`
+                : `You matched with ${typedMatches.length} startup${
+                    typedMatches.length === 1 ? '' : 's'
+                  }! Upgrade to Premium to see all matches and unlock premium features.`
               : 'Upload a resume to see personalized startup matches.'}
           </p>
+          {isPremium && candidate.stripe_customer_id && (
+            <ManageSubscriptionButton email={user.email ?? ''} />
+          )}
         </div>
 
-        {hasMatches ? (
-          showWaitlistOverlay ? (
-            <div className="relative">
-              {/* All matches blurred for waitlist */}
-              <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3 blur-md pointer-events-none select-none">
-                {typedMatches.map((match) => (
-                  <MatchCard key={match.id} match={match} />
-                ))}
-              </div>
+        {/* Free tier upgrade modal - doesn't affect layout */}
+        <UpgradeModalWrapper
+          shouldShow={hasMatches && isFree}
+          hiddenMatchCount={hiddenMatchCount}
+          email={user.email ?? ''}
+        />
 
-              {/* Overlay message */}
-              <div className="absolute inset-0 flex items-center justify-center">
-                <div className="bg-black/80 backdrop-blur-sm border border-white/30 rounded-3xl px-8 py-6 text-center shadow-2xl">
-                  <h3 className="text-2xl font-bold text-white mb-2">Thanks for joining the waitlist! More coming soon shortly</h3>
-                </div>
-              </div>
-            </div>
-          ) : (
+        {hasMatches ? (
+          <div>
+            {/* All matches in the same grid (shown + blurred) */}
             <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-              {typedMatches.map((match) => (
+              {/* Displayed matches (free users see only 1) */}
+              {displayedMatches.map((match) => (
                 <MatchCard key={match.id} match={match} />
               ))}
+              
+              {/* Blurred preview of additional matches (free tier only) */}
+              {isFree && hiddenMatchCount > 0 && (
+                <>
+                  {typedMatches.slice(1, Math.min(4, typedMatches.length)).map((match) => (
+                    <div key={match.id} className="blur-md pointer-events-none select-none opacity-60">
+                      <MatchCard match={match} />
+                    </div>
+                  ))}
+                </>
+              )}
             </div>
-          )
+          </div>
         ) : (
           <div className="rounded-3xl border border-white/20 bg-white/10 backdrop-blur-xl p-12 text-center text-white">
             <p className="text-lg text-white">No matches yet. Upload your resume to get started.</p>

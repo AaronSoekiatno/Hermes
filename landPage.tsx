@@ -12,7 +12,6 @@ import { HowItWorksJourney } from "@/components/HowItWorksJourney";
 import { SignInModal } from "@/components/SignInModal";
 import { SignUpModal } from "@/components/SignUpModal";
 import { ConnectGmailButton } from "@/components/ConnectGmailButton";
-import { WaitlistModal } from "@/components/WaitlistModal";
 import {
   Dialog,
   DialogContent,
@@ -132,10 +131,9 @@ export const Hero = () => {
   const progressIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const reuploadInProgress = useRef(false);
-  
+
   const [isSignInModalOpen, setIsSignInModalOpen] = useState(false);
   const [isSignUpModalOpen, setIsSignUpModalOpen] = useState(false);
-  const [showWaitlistModal, setShowWaitlistModal] = useState(false);
   const [user, setUser] = useState<User | null>(null);
   const [showGmailConnectModal, setShowGmailConnectModal] = useState(false);
   const [gmailConnected, setGmailConnected] = useState(false);
@@ -845,12 +843,6 @@ export const Hero = () => {
           onSwitchToSignIn={() => setIsSignInModalOpen(true)}
         />
 
-        {/* Waitlist Modal */}
-        <WaitlistModal 
-          open={showWaitlistModal} 
-          onOpenChange={setShowWaitlistModal} 
-        />
-
       {/* Content */}
       <div className="container relative z-10 px-4 py-20">
         <div className="max-w-4xl mx-auto text-center space-y-12">
@@ -862,10 +854,13 @@ export const Hero = () => {
                 Matches you with top startups, crafts personalized cold DMs, and saves you hours on professional outreach
               </p>
               <Button
-                onClick={() => setShowWaitlistModal(true)}
+                onClick={() => {
+                  const uploadSection = document.getElementById('resume-upload-section');
+                  uploadSection?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }}
                 className="mt-6 bg-gradient-to-r from-blue-500 to-blue-600 text-white hover:from-blue-400 hover:to-blue-500 px-8 py-6 text-lg font-semibold rounded-xl transition-all hover:scale-105"
               >
-                Join the Waitlist
+                Get Your Internship
               </Button>
           </div>
         </div>
@@ -1030,8 +1025,8 @@ export const Hero = () => {
       {/* Features Section */}
       <Features />
 
-      {/* Resume Upload Section - Hidden */}
-      {/* <section className="py-20 bg-gradient-to-br from-black via-gray-900 to-gray-800">
+      {/* Resume Upload Section */}
+      <section className="py-20 bg-gradient-to-br from-black via-gray-900 to-gray-800">
         <div className="container mx-auto px-4">
           <div className="max-w-md mx-auto">
             <div id="resume-upload-section" className="animate-in fade-in slide-in-from-bottom-8 duration-1000 delay-300">
@@ -1096,7 +1091,7 @@ export const Hero = () => {
             </div>
           </div>
         </div>
-      </section> */}
+      </section>
 
       {/* Footer Section */}
       <Footer />

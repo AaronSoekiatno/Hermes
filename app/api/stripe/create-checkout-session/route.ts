@@ -82,10 +82,15 @@ export async function POST(request: NextRequest) {
       customerId = customer.id;
 
       // Update candidate with Stripe customer ID
-      await supabaseAdmin
+      const { error: updateError } = await supabaseAdmin
         .from('candidates')
         .update({ stripe_customer_id: customerId })
         .eq('email', email);
+
+      if (updateError) {
+        console.error('Error saving Stripe customer ID:', updateError);
+        throw new Error(`Failed to save customer ID: ${updateError.message}`);
+      }
     }
 
     // Create Checkout Session

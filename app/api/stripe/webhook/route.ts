@@ -90,7 +90,7 @@ export async function POST(request: NextRequest) {
 async function handleSubscriptionUpdate(subscription: Stripe.Subscription) {
   const customerId = typeof subscription.customer === 'string' ? subscription.customer : subscription.customer.id;
   const subscriptionId = subscription.id;
-  const status = subscription.status;
+  const stripeStatus = subscription.status;
   const currentPeriodEnd = new Date((subscription as any).current_period_end * 1000).toISOString();
 
   if (!supabaseAdmin) {
@@ -109,16 +109,47 @@ async function handleSubscriptionUpdate(subscription: Stripe.Subscription) {
     return;
   }
 
+  // Map Stripe subscription status to our allowed database values
+  // Stripe can send: active, trialing, past_due, canceled, incomplete, incomplete_expired, unpaid, etc.
+  // Our database only allows: active, inactive, canceled, past_due, trialing
+  let subscriptionStatus: 'active' | 'inactive' | 'canceled' | 'past_due' | 'trialing';
+  
+  switch (stripeStatus) {
+    case 'active':
+      subscriptionStatus = 'active';
+      break;
+    case 'trialing':
+      subscriptionStatus = 'trialing';
+      break;
+    case 'past_due':
+      subscriptionStatus = 'past_due';
+      break;
+    case 'canceled':
+    case 'unpaid':
+    case 'incomplete_expired':
+      subscriptionStatus = 'canceled';
+      break;
+    case 'incomplete':
+    default:
+      // Map unknown/incomplete statuses to 'inactive' to avoid constraint violations
+      subscriptionStatus = 'inactive';
+      console.warn(`Mapping unknown Stripe status "${stripeStatus}" to "inactive" for customer ${customerId}`);
+      break;
+  }
+
   // Update candidate subscription status
   const updateData: any = {
     stripe_subscription_id: subscriptionId,
-    subscription_status: status,
+    subscription_status: subscriptionStatus,
     subscription_current_period_end: currentPeriodEnd,
   };
 
   // Set subscription tier based on status
-  if (status === 'active' || status === 'trialing') {
+  if (subscriptionStatus === 'active' || subscriptionStatus === 'trialing') {
     updateData.subscription_tier = 'premium';
+  } else {
+    // Downgrade to free for canceled, past_due, or inactive subscriptions
+    updateData.subscription_tier = 'free';
   }
 
   const { error: updateError } = await supabaseAdmin
@@ -131,7 +162,7 @@ async function handleSubscriptionUpdate(subscription: Stripe.Subscription) {
     throw updateError;
   }
 
-  console.log(`✅ Updated subscription for ${candidate.email}: ${status}`);
+  console.log(`✅ Updated subscription for ${candidate.email}: ${stripeStatus} -> ${subscriptionStatus}`);
 }
 
 /**

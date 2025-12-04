@@ -64,7 +64,27 @@ export interface CandidateRow {
   past_internships?: string; // Comma-separated string
   technical_projects?: string; // Comma-separated string
   resume_path?: string; // Path to resume file in Supabase Storage
+  subscription_tier?: 'free' | 'premium'; // Subscription tier
+  stripe_customer_id?: string; // Stripe customer ID
+  stripe_subscription_id?: string; // Stripe subscription ID
+  subscription_status?: 'active' | 'inactive' | 'canceled' | 'past_due' | 'trialing'; // Subscription status
+  subscription_current_period_end?: string; // ISO timestamp of when subscription period ends
   created_at?: string;
+}
+
+/**
+ * Check if a candidate has an active premium subscription
+ * @param candidate - Candidate data with subscription fields
+ * @returns true if the candidate has an active premium subscription
+ */
+export function isSubscribed(candidate: {
+  subscription_tier?: 'free' | 'premium';
+  subscription_status?: 'active' | 'inactive' | 'canceled' | 'past_due' | 'trialing';
+}): boolean {
+  return (
+    candidate.subscription_tier === 'premium' &&
+    (candidate.subscription_status === 'active' || candidate.subscription_status === 'trialing')
+  );
 }
 
 /**

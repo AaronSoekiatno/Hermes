@@ -3,8 +3,7 @@
     "allow": [
       "Bash(dir:*)",
       "Bash(curl:*)",
-      "Bash(del /F .gitindex.lock)",
-      "Bash(powershell -Command \"Remove-Item -Path ''.git\\index.lock'' -Force\")"
+      "Bash(npm run build:*)"
     ],
     "deny": [],
     "ask": []

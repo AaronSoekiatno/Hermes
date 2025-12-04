@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
+import { Loader2 } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -40,6 +41,7 @@ export const SendEmailButton = ({
   const handleOpenPreview = async () => {
     try {
       setIsPreviewLoading(true);
+      setIsDialogOpen(true); // Open dialog immediately to show loading state
 
       const response = await fetch("/api/send-email/preview", {
         method: 'POST',
@@ -61,7 +63,6 @@ export const SendEmailButton = ({
 
       setPreviewSubject(data.subject);
       setPreviewBody(data.body);
-      setIsDialogOpen(true);
 
       toast({
         title: "Email drafted",
@@ -69,6 +70,11 @@ export const SendEmailButton = ({
       });
     } catch (error) {
       console.error('Preview email error:', error);
+      
+      // Close dialog on error
+      setIsDialogOpen(false);
+      setPreviewSubject(null);
+      setPreviewBody(null);
       
       const errorMessage = error instanceof Error ? error.message : 'Failed to generate email preview';
       
@@ -179,7 +185,14 @@ export const SendEmailButton = ({
         variant={variant}
         className={className}
       >
-        {isPreviewLoading ? "Preparing..." : "Preview & Send"}
+        {isPreviewLoading ? (
+          <span className="flex items-center gap-2">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Preparing...
+          </span>
+        ) : (
+          "Preview & Send"
+        )}
       </Button>
 
       <DialogContent className="bg-black border-white/20 text-white sm:max-w-lg">
@@ -192,7 +205,12 @@ export const SendEmailButton = ({
           </DialogDescription>
         </DialogHeader>
 
-        {previewSubject && previewBody && (
+        {isPreviewLoading && !previewSubject && !previewBody ? (
+          <div className="flex flex-col items-center justify-center py-12 space-y-4">
+            <Loader2 className="h-8 w-8 animate-spin text-blue-500" />
+            <p className="text-white/70 text-sm">Generating your personalized email...</p>
+          </div>
+        ) : previewSubject && previewBody ? (
           <div className="space-y-4 text-sm">
             <div className="space-y-2">
               <label className="font-semibold text-white block">Subject:</label>
@@ -213,7 +231,7 @@ export const SendEmailButton = ({
               />
             </div>
           </div>
-        )}
+        ) : null}
 
         <DialogFooter className="mt-6">
           <Button
@@ -225,10 +243,17 @@ export const SendEmailButton = ({
           </Button>
           <Button
             onClick={handleSendEmail}
-            disabled={isSending}
-            className="bg-blue-500 hover:bg-blue-400 text-white"
+            disabled={isSending || isPreviewLoading}
+            className="bg-blue-500 hover:bg-blue-400 text-white disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {isSending ? "Sending..." : "Send Email"}
+            {isSending ? (
+              <span className="flex items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Sending...
+              </span>
+            ) : (
+              "Send Email"
+            )}
           </Button>
         </DialogFooter>
       </DialogContent>

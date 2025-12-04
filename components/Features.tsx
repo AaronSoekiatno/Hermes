@@ -27,7 +27,7 @@ export const Features = () => {
       <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 md:px-8">
         <div className="text-center max-w-3xl mx-auto mb-10 sm:mb-12 md:mb-16">
           <h2 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-bold text-white mb-3 sm:mb-4 px-2">
-            Why Choose ColdReach?
+            Why Choose Hermes?
           </h2>
           <p className="text-sm sm:text-base md:text-lg text-white/80 px-2">
             To effortlessly land the job before everyone else

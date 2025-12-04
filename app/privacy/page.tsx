@@ -8,12 +8,12 @@ export default function PrivacyPolicy() {
 
           <div className="space-y-6 text-gray-700">
             <p>
-              This Privacy Notice for <strong>ColdReach</strong> ("<strong>we</strong>," "<strong>us</strong>," or "<strong>our</strong>"), describes how and why we might access, collect, store, use, and/or share ("<strong>process</strong>") your personal information when you use our services ("<strong>Services</strong>"), including when you:
+              This Privacy Notice for <strong>Hermes</strong> ("<strong>we</strong>," "<strong>us</strong>," or "<strong>our</strong>"), describes how and why we might access, collect, store, use, and/or share ("<strong>process</strong>") your personal information when you use our services ("<strong>Services</strong>"), including when you:
             </p>
 
             <ul className="list-disc pl-6 space-y-2">
               <li>Visit our website at <a href="https://cold-start-nu.vercel.app/" className="text-blue-600 hover:underline">https://cold-start-nu.vercel.app/</a> or any website of ours that links to this Privacy Notice</li>
-              <li>Use <strong>ColdReach</strong>. <strong>ColdReach is a platform that helps students and job seekers find internships and opportunities at startups.</strong></li>
+              <li>Use <strong>Hermes</strong>. <strong>Hermes is a platform that helps students and job seekers find internships and opportunities at startups.</strong></li>
               <li>Engage with us in other related ways, including any marketing or events</li>
             </ul>
 
@@ -507,7 +507,7 @@ export default function PrivacyPolicy() {
             </p>
 
             <p className="mt-4">
-              <strong>ColdReach</strong><br />
+              <strong>Hermes</strong><br />
               __________<br />
               __________<br />
               United States

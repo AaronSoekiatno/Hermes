@@ -79,7 +79,7 @@ export function WaitlistModal({ open, onOpenChange }: WaitlistModalProps) {
             Join the Waitlist
           </DialogTitle>
           <DialogDescription className="text-white/60 text-center">
-            Be the first to know when we launch. Get early access to ColdReach.
+            Be the first to know when we launch. Get early access to Hermes.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4 mt-4">

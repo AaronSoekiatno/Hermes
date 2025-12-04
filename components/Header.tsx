@@ -42,11 +42,11 @@ export const Header = ({ initialUser }: HeaderProps) => {
         <Link href="/" className="flex items-center gap-3">
           <Image
             src={logo}
-            alt="ColdReach logo"
+            alt="Hermes logo"
             className="h-9 w-auto rounded-lg"
             priority
           />
-          <span className="text-white font-semibold text-2xl">ColdReach</span>
+          <span className="text-white font-semibold text-2xl">Hermes</span>
         </Link>
 
         {/* Sign In Button / Account Indicator */}

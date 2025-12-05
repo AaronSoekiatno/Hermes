@@ -277,11 +277,18 @@ export const Hero = () => {
           });
         }
       }
+
+      // Check if user was redirected here to sign up
+      if (urlParams.get('signup') === 'true' && !currentUser) {
+        setIsSignUpModalOpen(true);
+      }
       
-      // Clean up URL if we came from auth callback
-      if (isAuthCallback || urlParams.has('gmail_connected') || urlParams.has('error')) {
+      // Clean up URL if we came from auth callback or signup redirect
+      if (isAuthCallback || urlParams.has('gmail_connected') || urlParams.has('error') || urlParams.has('signup')) {
         // Remove query params and hash
-        window.history.replaceState({}, '', window.location.pathname);
+        const redirectTo = urlParams.get('redirect');
+        const cleanPath = redirectTo ? redirectTo : window.location.pathname;
+        window.history.replaceState({}, '', cleanPath);
       }
     };
     void initializeAuth();
@@ -312,27 +319,35 @@ export const Hero = () => {
         // If same user, keep hasCheckedGmail as is to prevent duplicate checks
       }
 
-      // If user just signed in and we have pending resume data, save it
-      if (
-        event === 'SIGNED_IN' &&
-        newUser &&
-        pendingResumeData &&
-        !pendingResumeData.savedToDatabase &&
-        uploadedFile &&
-        !reuploadInProgress.current
-      ) {
-        setShowSavingModal(true);
-        reuploadPendingResume({ silent: true }).then((success) => {
-          if (success) {
-            // Navigate to matches page after successful save
-            setTimeout(() => {
+      // If user just signed in, handle redirects
+      if (event === 'SIGNED_IN' && newUser) {
+        // Check for redirect parameter
+        const urlParams = new URLSearchParams(window.location.search);
+        const redirectTo = urlParams.get('redirect');
+        
+        // If user just signed in and we have pending resume data, save it
+        if (
+          pendingResumeData &&
+          !pendingResumeData.savedToDatabase &&
+          uploadedFile &&
+          !reuploadInProgress.current
+        ) {
+          setShowSavingModal(true);
+          reuploadPendingResume({ silent: true }).then((success) => {
+            if (success) {
+              // Navigate to redirect URL or matches page after successful save
+              setTimeout(() => {
+                setShowSavingModal(false);
+                router.push(redirectTo || '/matches');
+              }, 500);
+            } else {
               setShowSavingModal(false);
-              router.push('/matches');
-            }, 500);
-          } else {
-            setShowSavingModal(false);
-          }
-        });
+            }
+          });
+        } else if (redirectTo) {
+          // No pending resume, just redirect
+          router.push(redirectTo);
+        }
       }
 
       // If user signed out, reset Gmail connection state
@@ -895,6 +910,7 @@ export const Hero = () => {
           onOpenChange={setIsSignUpModalOpen}
           fromReview={pendingResumeData !== null && !pendingResumeData.savedToDatabase}
           onSwitchToSignIn={() => setIsSignInModalOpen(true)}
+          redirectTo={typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('redirect') || undefined : undefined}
         />
 
       {/* Content */}

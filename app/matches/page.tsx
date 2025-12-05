@@ -47,7 +47,7 @@ export default async function MatchesPage() {
   } = await supabase.auth.getUser();
 
   if (!user) {
-    redirect(`/login?redirect=/matches`);
+    redirect(`/?signup=true&redirect=/matches`);
   }
 
   if (!supabaseAdmin) {

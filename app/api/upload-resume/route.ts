@@ -568,12 +568,12 @@ export async function POST(request: NextRequest) {
     }
 
     // Find matching startups with quality threshold
-    // minScore = 0.45 (45%) - filters out very weak matches
+    // minScore = 0.30 (30%) - filters out very weak matches
     // For free users, we find all matches but only save the top 1
     let matches: Array<{ id: string; score: number; metadata: any }> = [];
     let matchingError: string | undefined;
     try {
-      const MIN_MATCH_SCORE = 0.45; // Only show matches above 45% similarity
+      const MIN_MATCH_SCORE = 0.30; // Only show matches above 30% similarity
       const isPremium = isSubscribed({ subscription_tier: subscriptionTier, subscription_status: subscriptionStatus });
       const maxMatches = isPremium ? 10 : 10; // Find 10 matches but will only save 1 for free users
       matches = await findMatchingStartups(embedding, maxMatches, MIN_MATCH_SCORE);

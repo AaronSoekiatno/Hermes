@@ -44,7 +44,7 @@ export default async function HistoryPage() {
   } = await supabase.auth.getUser();
 
   if (!user) {
-    redirect(`/login?redirect=/history`);
+    redirect(`/?signup=true&redirect=/history`);
   }
 
   if (!supabaseAdmin) {

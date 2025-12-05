@@ -258,6 +258,14 @@ export const Hero = () => {
           description: "You can now send emails directly from your account.",
         });
       }
+
+      // Check if this is a new sign-up and trigger Gmail connection check
+      if (urlParams.get('new_signup') === 'true' && currentUser) {
+        // Small delay to ensure state is ready
+        setTimeout(() => {
+          void checkGmailConnection(currentUser, true);
+        }, 1000);
+      }
       
       // Check if user needs to sign in to connect Gmail
       if (urlParams.get('error') === 'please_sign_in' && urlParams.get('action') === 'connect_gmail') {
@@ -291,6 +299,15 @@ export const Hero = () => {
           // User changed - reset check state for new user
           setHasCheckedGmail(false);
           lastCheckedUserRef.current = newUser.email;
+          
+          // Check if this is a new sign-up by checking URL params or checking if user has candidate record
+          const urlParams = new URLSearchParams(window.location.search);
+          const isNewSignUp = urlParams.get('new_signup') === 'true' || urlParams.get('code') !== null;
+          
+          // Check Gmail connection immediately for new sign-ups, with a small delay to ensure state is ready
+          setTimeout(() => {
+            void checkGmailConnection(newUser, isNewSignUp);
+          }, 500);
         }
         // If same user, keep hasCheckedGmail as is to prevent duplicate checks
       }
@@ -430,13 +447,26 @@ export const Hero = () => {
         await savePendingResumeToStorage(resumePayload, resume);
       }
 
+      // Check if user is authenticated
+      const { data: { user: currentUser } } = await supabase.auth.getUser();
+
       setTimeout(() => {
         setShowProgressModal(false);
-        setShowResultsModal(true);
-        toast({
-          title: "Resume processed",
-          description: `We found ${count} startup${count !== 1 ? "s" : ""} that look like a great fit.`,
-        });
+        if (currentUser) {
+          // User is authenticated - show results modal
+          setShowResultsModal(true);
+          toast({
+            title: "Resume processed",
+            description: `We found ${count} startup${count !== 1 ? "s" : ""} that look like a great fit.`,
+          });
+        } else {
+          // User is not authenticated - show sign-up modal directly
+          setIsSignUpModalOpen(true);
+          toast({
+            title: "Resume processed",
+            description: `We found ${count} startup${count !== 1 ? "s" : ""} that look like a great fit. Sign up to view them!`,
+          });
+        }
         setFile(null);
         if (fileInputRef.current) {
           fileInputRef.current.value = "";
@@ -527,115 +557,133 @@ export const Hero = () => {
   };
 
   // Check Gmail connection status
-  // DISABLED: Gmail connect functionality temporarily hidden
-  const checkGmailConnection = async (currentUser?: User | null) => {
-    // Function disabled - Gmail connect functionality temporarily hidden
-    return;
-    
-    // const activeUser = currentUser ?? user;
+  const checkGmailConnection = async (currentUser?: User | null, showImmediately = false) => {
+    const activeUser = currentUser ?? user;
 
-    // if (!activeUser) {
-    //   setHasCheckedGmail(false);
-    //   checkingGmailRef.current = false;
-    //   return;
-    // }
+    if (!activeUser) {
+      setHasCheckedGmail(false);
+      checkingGmailRef.current = false;
+      return;
+    }
 
-    // // Prevent duplicate checks
-    // if (checkingGmailRef.current) {
-    //   return;
-    // }
+    // Prevent duplicate checks
+    if (checkingGmailRef.current) {
+      return;
+    }
 
-    // // Don't check if modal is already showing or Gmail is already connected
-    // if (showGmailConnectModal || gmailConnected) {
-    //   setHasCheckedGmail(true);
-    //   checkingGmailRef.current = false;
-    //   return;
-    // }
+    // Don't check if modal is already showing or Gmail is already connected
+    if (showGmailConnectModal || gmailConnected) {
+      setHasCheckedGmail(true);
+      checkingGmailRef.current = false;
+      return;
+    }
 
-    // checkingGmailRef.current = true;
+    checkingGmailRef.current = true;
 
-    // // Clear any existing timeout and reset scheduled flag
-    // if (gmailCheckTimeoutRef.current) {
-    //   clearTimeout(gmailCheckTimeoutRef.current);
-    //   gmailCheckTimeoutRef.current = null;
-    // }
-    // modalScheduledRef.current = false;
+    // Clear any existing timeout and reset scheduled flag
+    if (gmailCheckTimeoutRef.current) {
+      clearTimeout(gmailCheckTimeoutRef.current);
+      gmailCheckTimeoutRef.current = null;
+    }
+    modalScheduledRef.current = false;
 
-    // try {
-    //   const response = await fetch('/api/auth/gmail/status', {
-    //     credentials: 'include',
-    //   });
+    try {
+      const response = await fetch('/api/auth/gmail/status', {
+        credentials: 'include',
+      });
 
-    //   console.log('[Gmail Status][client] Response status:', response.status);
+      console.log('[Gmail Status][client] Response status:', response.status);
 
-    //   if (response.ok) {
-    //     const data = await response.json();
-    //     console.log('[Gmail Status][client] Response JSON:', data);
+      if (response.ok) {
+        const data = await response.json();
+        console.log('[Gmail Status][client] Response JSON:', data);
 
-    //     // Treat any existing connection as "connected" even if the access token is expired.
-    //     // Expiration is handled server-side by refreshing the token when sending emails.
-    //     const connected = data.connected === true;
-    //     setGmailConnected(connected);
+        // Treat any existing connection as "connected" even if the access token is expired.
+        // Expiration is handled server-side by refreshing the token when sending emails.
+        const connected = data.connected === true;
+        setGmailConnected(connected);
 
-    //     // Only prompt to connect if there is truly no connection row
-    //     if (!connected && !modalScheduledRef.current) {
-    //       modalScheduledRef.current = true;
-    //       gmailCheckTimeoutRef.current = setTimeout(() => {
-    //         setShowGmailConnectModal((prev) => {
-    //           // Only show if not already showing
-    //           if (!prev) {
-    //             return true;
-    //           }
-    //           return prev;
-    //         });
-    //         gmailCheckTimeoutRef.current = null;
-    //         modalScheduledRef.current = false;
-    //       }, 1500);
-    //     }
-    //   } else {
-    //     setGmailConnected(false);
-    //     // Schedule modal if not already scheduled
-    //     if (!modalScheduledRef.current) {
-    //       modalScheduledRef.current = true;
-    //       gmailCheckTimeoutRef.current = setTimeout(() => {
-    //         setShowGmailConnectModal((prev) => {
-    //           if (!prev) {
-    //             return true;
-    //           }
-    //           return prev;
-    //         });
-    //         gmailCheckTimeoutRef.current = null;
-    //         modalScheduledRef.current = false;
-    //       }, 1500);
-    //     }
-    //   }
-    // } catch (error) {
-    //   console.error('Failed to check Gmail connection:', error);
-    //   setGmailConnected(false);
-    //   // Schedule modal if not already scheduled
-    //   if (!modalScheduledRef.current) {
-    //     modalScheduledRef.current = true;
-    //     gmailCheckTimeoutRef.current = setTimeout(() => {
-    //       setShowGmailConnectModal((prev) => {
-    //         if (!prev) {
-    //           return true;
-    //         }
-    //         return prev;
-    //       });
-    //       gmailCheckTimeoutRef.current = null;
-    //       modalScheduledRef.current = false;
-    //     }
-    //   }
-    // } finally {
-    //   setHasCheckedGmail(true);
-    //   checkingGmailRef.current = false;
-    // }
+        // Only prompt to connect if there is truly no connection row
+        if (!connected && !modalScheduledRef.current) {
+          modalScheduledRef.current = true;
+          if (showImmediately) {
+            // Show immediately for new sign-ups
+            setShowGmailConnectModal(true);
+            modalScheduledRef.current = false;
+          } else {
+            // Delay for existing users
+            gmailCheckTimeoutRef.current = setTimeout(() => {
+              setShowGmailConnectModal((prev) => {
+                // Only show if not already showing
+                if (!prev) {
+                  return true;
+                }
+                return prev;
+              });
+              gmailCheckTimeoutRef.current = null;
+              modalScheduledRef.current = false;
+            }, 1500);
+          }
+        }
+      } else {
+        setGmailConnected(false);
+        // Schedule modal if not already scheduled
+        if (!modalScheduledRef.current) {
+          modalScheduledRef.current = true;
+          if (showImmediately) {
+            setShowGmailConnectModal(true);
+            modalScheduledRef.current = false;
+          } else {
+            gmailCheckTimeoutRef.current = setTimeout(() => {
+              setShowGmailConnectModal((prev) => {
+                if (!prev) {
+                  return true;
+                }
+                return prev;
+              });
+              gmailCheckTimeoutRef.current = null;
+              modalScheduledRef.current = false;
+            }, 1500);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Failed to check Gmail connection:', error);
+      setGmailConnected(false);
+      // Schedule modal if not already scheduled
+      if (!modalScheduledRef.current) {
+        modalScheduledRef.current = true;
+        if (showImmediately) {
+          setShowGmailConnectModal(true);
+          modalScheduledRef.current = false;
+        } else {
+          gmailCheckTimeoutRef.current = setTimeout(() => {
+            setShowGmailConnectModal((prev) => {
+              if (!prev) {
+                return true;
+              }
+              return prev;
+            });
+            gmailCheckTimeoutRef.current = null;
+            modalScheduledRef.current = false;
+          }, 1500);
+        }
+      }
+    } finally {
+      setHasCheckedGmail(true);
+      checkingGmailRef.current = false;
+    }
   };
 
-  // Check Gmail connection when user is available
+  // Check Gmail connection when user is available (only if not already checked via auth state change)
   useEffect(() => {
+    // Only auto-check if user exists, hasn't been checked, modal isn't showing, Gmail isn't connected, and we're not currently checking
+    // This is a fallback for cases where auth state change didn't trigger the check
     if (user && !hasCheckedGmail && !showGmailConnectModal && !gmailConnected && !checkingGmailRef.current) {
-      void checkGmailConnection();
+      // Check URL params first to see if this is a new sign-up
+      const urlParams = new URLSearchParams(window.location.search);
+      const isNewSignUp = urlParams.get('new_signup') === 'true';
+      void checkGmailConnection(user, isNewSignUp);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, hasCheckedGmail]);
@@ -845,7 +893,7 @@ export const Hero = () => {
         <SignUpModal 
           open={isSignUpModalOpen} 
           onOpenChange={setIsSignUpModalOpen}
-          fromReview={false}
+          fromReview={pendingResumeData !== null && !pendingResumeData.savedToDatabase}
           onSwitchToSignIn={() => setIsSignInModalOpen(true)}
         />
 
@@ -1060,8 +1108,14 @@ export const Hero = () => {
               setShowResultsModal(false);
               const { data: { user: currentUser } } = await supabase.auth.getUser();
               if (!currentUser) {
+                // This shouldn't happen since we check auth before showing this modal,
+                // but handle it just in case
                 setIsSignUpModalOpen(true);
-              } else if (pendingResumeData && !pendingResumeData.savedToDatabase && uploadedFile) {
+                return;
+              }
+              
+              // User is authenticated - save resume if needed and redirect
+              if (pendingResumeData && !pendingResumeData.savedToDatabase && uploadedFile) {
                 try {
                   const formData = new FormData();
                   formData.append("resume", uploadedFile);

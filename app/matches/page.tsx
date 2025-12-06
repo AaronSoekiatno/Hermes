@@ -202,9 +202,7 @@ export default function MatchesPage() {
         <div className="container mx-auto px-4 space-y-12">
           <div className="max-w-4xl mx-auto text-center space-y-12">
             <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-1000">
-              <h1 className="text-5xl md:text-7xl font-bold text-white leading-tight line-clamp-2">
-                Startups excited to meet you
-              </h1>
+              
               <p className="text-md md:text-xl text-white/80 max-w-2xl mx-auto">
                 {matchCountText}
               </p>

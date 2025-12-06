@@ -21,7 +21,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { User } from "@supabase/supabase-js";
-import { supabase } from "@/lib/supabase";
+import { supabase, isSubscribed } from "@/lib/supabase";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -143,11 +143,14 @@ export const Hero = () => {
   const [hasCheckedGmail, setHasCheckedGmail] = useState(false);
   const [showPremiumModal, setShowPremiumModal] = useState(false);
   const [hiddenMatchCount, setHiddenMatchCount] = useState(0);
+  const [isPremium, setIsPremium] = useState(false);
   const { toast } = useToast();
   const checkingGmailRef = useRef(false);
   const gmailCheckTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const modalScheduledRef = useRef(false);
   const lastCheckedUserRef = useRef<string | null>(null); // Track which user email was last checked
+  const fetchingPremiumRef = useRef(false);
+  const lastFetchedEmailRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -725,6 +728,44 @@ export const Hero = () => {
     }
   }, [showPremiumModal]);
 
+  // Fetch candidate info to check premium status - only when email changes
+  useEffect(() => {
+    const fetchCandidateInfo = async () => {
+      const userEmail = user?.email;
+      if (!userEmail) {
+        setIsPremium(false);
+        lastFetchedEmailRef.current = null;
+        return;
+      }
+
+      // Prevent duplicate requests - check if we're already fetching or if we just fetched this email
+      if (fetchingPremiumRef.current || lastFetchedEmailRef.current === userEmail) {
+        return;
+      }
+      
+      fetchingPremiumRef.current = true;
+      try {
+        const response = await fetch('/api/candidate-info', {
+          credentials: 'include',
+        });
+        if (response.ok) {
+          const candidateInfo = await response.json();
+          setIsPremium(isSubscribed(candidateInfo));
+          lastFetchedEmailRef.current = userEmail;
+        } else {
+          setIsPremium(false);
+        }
+      } catch (error) {
+        console.error('Error fetching candidate info:', error);
+        setIsPremium(false);
+      } finally {
+        fetchingPremiumRef.current = false;
+      }
+    };
+
+    fetchCandidateInfo();
+  }, [user?.email]);
+
 
   return (
     <div className="min-h-screen" style={{ backgroundColor: '#0E1422' }}>
@@ -777,6 +818,42 @@ export const Hero = () => {
                     <div className="px-4 py-2 text-sm text-white/80 border-b border-white/10">
                       {user.email}
                     </div>
+                    {isPremium && (
+                      <DropdownMenuItem
+                        className="cursor-pointer font-bold text-white w-full px-4 py-2 text-center hover:bg-white/20 focus:bg-white/20 border-b border-white/10"
+                        onSelect={async () => {
+                          try {
+                            const response = await fetch('/api/stripe/create-portal-session', {
+                              method: 'POST',
+                              headers: {
+                                'Content-Type': 'application/json',
+                              },
+                              body: JSON.stringify({ email: user.email ?? '' }),
+                            });
+
+                            const data = await response.json();
+
+                            if (!response.ok) {
+                              throw new Error(data.error || 'Failed to create portal session');
+                            }
+
+                            // Redirect to Stripe Customer Portal
+                            if (data.url) {
+                              window.location.href = data.url;
+                            }
+                          } catch (error: any) {
+                            console.error('Error opening portal:', error);
+                            toast({
+                              title: "Error",
+                              description: error.message || 'Failed to open subscription management',
+                              variant: "destructive",
+                            });
+                          }
+                        }}
+                      >
+                        Manage Subscription
+                      </DropdownMenuItem>
+                    )}
                     {/* Gmail connect functionality temporarily hidden */}
                     {/* {gmailConnected ? (
                       <div className="px-4 py-2 text-sm text-white/60 border-b border-white/10 flex items-center justify-center gap-2">

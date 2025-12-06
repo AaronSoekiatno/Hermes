@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getStripe } from '@/lib/stripe';
-import { supabase, supabaseAdmin } from '@/lib/supabase';
+import { supabaseAdmin } from '@/lib/supabase';
+import { createServerClient } from '@supabase/ssr';
 
 /**
  * POST /api/stripe/create-portal-session
@@ -17,18 +18,50 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Verify user is authenticated
-    const { data: { user } } = await supabase.auth.getUser();
+    // Import cookies at runtime (Next.js 15+ requirement)
+    const { cookies } = await import('next/headers');
+    const cookieStore = await cookies();
 
-    if (!user || user.email !== email) {
+    const supabase = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          getAll() {
+            return cookieStore.getAll();
+          },
+          setAll(cookiesToSet) {
+            try {
+              cookiesToSet.forEach(({ name, value, options }) => {
+                cookieStore.set(name, value, options);
+              });
+            } catch {
+              // Cookie setting might fail in route handlers - this is okay
+            }
+          },
+        },
+      }
+    );
+
+    // Verify user is authenticated
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+
+    if (authError || !user || user.email !== email) {
       return NextResponse.json(
         { error: 'Unauthorized' },
         { status: 401 }
       );
     }
 
-    // Get candidate's Stripe customer ID
-    const { data: candidate } = await supabase
+    // Get candidate's Stripe customer ID (use admin client for database access)
+    if (!supabaseAdmin) {
+      return NextResponse.json(
+        { error: 'Server configuration error' },
+        { status: 500 }
+      );
+    }
+
+    const { data: candidate } = await supabaseAdmin
       .from('candidates')
       .select('stripe_customer_id')
       .eq('email', email)

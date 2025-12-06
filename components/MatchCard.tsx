@@ -28,18 +28,18 @@ const MatchCardComponent = ({ match }: MatchCardProps) => {
   }
 
   return (
-    <article className="rounded-3xl border border-white/20 bg-white/10 backdrop-blur-xl p-6 shadow-2xl hover:bg-white/15 hover:border-white/30 transition-all duration-300">
+    <article className="relative rounded-3xl border border-white/20 bg-white/10 backdrop-blur-xl p-6 shadow-2xl hover:bg-white/15 hover:border-white/30 transition-all duration-300">
+      {match.score >= 0.5 && (
+        <span className="absolute -top-2 -left-3 bg-gradient-to-r from-green-500 to-emerald-500 text-white px-3 py-1 text-xs font-bold shadow-lg rounded-lg z-10 transform -rotate-14">
+          Perfect-Fit
+        </span>
+      )}
       <div className="flex items-center justify-between mb-4">
         <div className="flex-1">
           <div className="flex items-center gap-2 mb-1">
             <h2 className="text-2xl font-semibold text-white">
               {match.startup.name}
             </h2>
-            {match.score > 0.4 && (
-              <span className="bg-gradient-to-r from-green-500 to-emerald-500 text-white px-3 py-1 text-xs font-bold shadow-lg rounded-xl">
-                Perfect-Fit
-              </span>
-            )}
           </div>
           <p className="text-sm text-white/70">{match.startup.industry}</p>
         </div>
@@ -93,7 +93,7 @@ const MatchCardComponent = ({ match }: MatchCardProps) => {
             matchScore={match.score}
             founderEmail={match.startup.founder_emails}
             variant="default"
-            className="rounded-2xl bg-blue-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-400 shadow-lg hover:shadow-xl"
+            className="rounded-2xl bg-gradient-to-r from-blue-500 to-indigo-500 px-4 py-2 text-sm font-semibold text-white transition hover:from-blue-400 hover:to-indigo-400 shadow-lg hover:shadow-xl"
           />
         )}
       </div>

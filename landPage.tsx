@@ -128,6 +128,7 @@ export const Hero = () => {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [matchedStartups, setMatchedStartups] = useState<string[]>([]);
   const [matchCount, setMatchCount] = useState<number>(0);
+  const [perfectFitCount, setPerfectFitCount] = useState<number>(0);
   const [pendingResumeData, setPendingResumeData] = useState<any>(null);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -445,7 +446,10 @@ export const Hero = () => {
       const data = await response.json();
       const matches = data.matches || [];
       const count = matches.length;
+      const perfectFitMatches = matches.filter((match: any) => match.score >= 0.5);
+      const perfectFitCount = perfectFitMatches.length;
       setMatchCount(count);
+      setPerfectFitCount(perfectFitCount);
       setMatchedStartups(simulateMatches());
 
       const resumePayload = {
@@ -1107,11 +1111,11 @@ export const Hero = () => {
           <div className="bg-white/5 rounded-2xl p-4 space-y-2 text-left">
             <div className="flex items-center gap-3">
               <div className="w-5 h-5 rounded-full bg-green-500 flex items-center justify-center text-xs">✓</div>
-              <span className="text-sm text-white">{matchCount} perfect-fit startup{matchCount !== 1 ? 's' : ''} matched</span>
+              <span className="text-sm text-white">{perfectFitCount} Perfect fit startup{perfectFitCount !== 1 ? 's' : ''}</span>
             </div>
             <div className="flex items-center gap-3">
               <div className="w-5 h-5 rounded-full bg-green-500 flex items-center justify-center text-xs">✓</div>
-              <span className="text-sm text-white">Personalized cold DMs ready to send</span>
+              <span className="text-sm text-white">Personalized cold DMs ready</span>
             </div>
             <div className="flex items-center gap-3">
               <div className="w-5 h-5 rounded-full bg-blue-500 flex items-center justify-center text-xs">→</div>

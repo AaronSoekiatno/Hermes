@@ -151,16 +151,19 @@ export default function MatchesPage() {
   // Memoized values - must be called before any conditional returns
   const hasMatches = useMemo(() => matches.length > 0, [matches.length]);
   
-  // Count only matches with actual score > 40% (0.4)
-  const highQualityMatchCount = useMemo(() => {
-    return matches.filter(match => match.score > 0.4).length;
+  // Count only perfect-fit matches with score >= 50% (0.5)
+  const perfectFitMatchCount = useMemo(() => {
+    return matches.filter(match => match.score >= 0.5).length;
   }, [matches]);
   
   const matchCountText = useMemo(() => {
     if (!hasMatches) return 'Upload a resume to see personalized startup matches.';
-    const count = highQualityMatchCount;
-    return `Congrats! You directly matched with ${count} startup${count === 1 ? '' : 's'}! Review these companies and send personalized emails.`;
-  }, [hasMatches, highQualityMatchCount]);
+    const count = perfectFitMatchCount;
+    if (count > 0) {
+      return `Congrats! You directly matched with ${count} startup${count === 1 ? '' : 's'}! Review these companies and send personalized emails.`;
+    }
+    return 'Review these companies and send personalized emails.';
+  }, [hasMatches, perfectFitMatchCount]);
 
   if (isLoading) {
     return (
@@ -199,7 +202,7 @@ export default function MatchesPage() {
         <div className="container mx-auto px-4 space-y-12">
           <div className="max-w-4xl mx-auto text-center space-y-12">
             <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-1000">
-              <h1 className="text-5xl md:text-7xl font-bold text-white leading-tight">
+              <h1 className="text-5xl md:text-7xl font-bold text-white leading-tight line-clamp-2">
                 Startups excited to meet you
               </h1>
               <p className="text-md md:text-xl text-white/80 max-w-2xl mx-auto">

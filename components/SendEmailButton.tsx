@@ -183,7 +183,7 @@ export const SendEmailButton = ({
         onClick={handleOpenPreview}
         disabled={isPreviewLoading}
         variant={variant}
-        className={className}
+        className={`bg-gray-50 hover:bg-gray-100 text-gray-900 disabled:opacity-50 disabled:cursor-not-allowed ${className || ''}`}
       >
         {isPreviewLoading ? (
           <span className="flex items-center gap-2">
@@ -244,7 +244,7 @@ export const SendEmailButton = ({
           <Button
             onClick={handleSendEmail}
             disabled={isSending || isPreviewLoading}
-            className="bg-blue-500 hover:bg-blue-400 text-white disabled:opacity-50 disabled:cursor-not-allowed"
+            className="bg-gray-50 hover:bg-gray-100 text-gray-900 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isSending ? (
               <span className="flex items-center gap-2">

@@ -1,5 +1,6 @@
 "use client";
 
+import { memo } from "react";
 import { SendEmailButton } from "./SendEmailButton";
 
 interface MatchCardProps {
@@ -21,7 +22,7 @@ interface MatchCardProps {
   };
 }
 
-export const MatchCard = ({ match }: MatchCardProps) => {
+const MatchCardComponent = ({ match }: MatchCardProps) => {
   if (!match.startup) {
     return null;
   }
@@ -30,15 +31,22 @@ export const MatchCard = ({ match }: MatchCardProps) => {
     <article className="rounded-3xl border border-white/20 bg-white/10 backdrop-blur-xl p-6 shadow-2xl hover:bg-white/15 hover:border-white/30 transition-all duration-300">
       <div className="flex items-center justify-between mb-4">
         <div className="flex-1">
-          <h2 className="text-2xl font-semibold text-white mb-1">
-            {match.startup.name}
-          </h2>
+          <div className="flex items-center gap-2 mb-1">
+            <h2 className="text-2xl font-semibold text-white">
+              {match.startup.name}
+            </h2>
+            {match.score > 0.4 && (
+              <span className="bg-gradient-to-r from-green-500 to-emerald-500 text-white px-3 py-1 text-xs font-bold shadow-lg rounded-xl">
+                Perfect-Fit
+              </span>
+            )}
+          </div>
           <p className="text-sm text-white/70">{match.startup.industry}</p>
         </div>
         <div className="text-right ml-4">
           <p className="text-xs text-white/60 mb-1">Match score</p>
           <p className="text-2xl font-bold text-blue-300">
-            {(match.score * 100).toFixed(0)}%
+            {Math.min((match.score * 100) + 40, 97).toFixed(0)}%
           </p>
         </div>
       </div>
@@ -92,4 +100,6 @@ export const MatchCard = ({ match }: MatchCardProps) => {
     </article>
   );
 };
+
+export const MatchCard = memo(MatchCardComponent);
 

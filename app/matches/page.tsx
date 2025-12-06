@@ -1,13 +1,10 @@
 'use client';
 
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { MatchCard } from '@/components/MatchCard';
 import { Header } from '@/components/Header';
-import { ManageSubscriptionButton } from '@/components/ManageSubscriptionButton';
-import { UpgradeModalWrapper } from '@/components/UpgradeModalWrapper';
-import { isSubscribed } from '@/lib/supabase';
 import type { User } from '@supabase/supabase-js';
 
 interface MatchRecord {
@@ -38,7 +35,6 @@ interface PaginationInfo {
 export default function MatchesPage() {
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
-  const [candidate, setCandidate] = useState<any>(null);
   const [matches, setMatches] = useState<MatchRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -75,15 +71,6 @@ export default function MatchesPage() {
         const data = await response.json();
         setMatches(data.matches || []);
         setPagination(data.pagination);
-
-        // Get candidate subscription info for display
-        const candidateResponse = await fetch('/api/candidate-info', {
-          credentials: 'include',
-        });
-        if (candidateResponse.ok) {
-          const candidateData = await candidateResponse.json();
-          setCandidate(candidateData);
-        }
       } catch (error) {
         console.error('Error initializing matches page:', error);
         setHasError(true);
@@ -95,40 +82,58 @@ export default function MatchesPage() {
     initialize();
   }, [router]);
 
-  // Load more matches
+  // Load more matches - memoized with stable dependencies
   const loadMoreMatches = useCallback(async () => {
-    if (!pagination?.hasMore || isLoadingMore) return;
+    if (isLoadingMore) return;
+    
+    // Use functional update to get current pagination state
+    setPagination((currentPagination) => {
+      if (!currentPagination?.hasMore || isLoadingMore) return currentPagination;
 
-    setIsLoadingMore(true);
-    try {
-      const nextPage = pagination.page + 1;
-      const response = await fetch(`/api/matches?page=${nextPage}&limit=6`, {
+      setIsLoadingMore(true);
+      const nextPage = currentPagination.page + 1;
+      
+      // Fetch in background
+      fetch(`/api/matches?page=${nextPage}&limit=6`, {
         credentials: 'include',
-      });
+      })
+        .then((response) => {
+          if (!response.ok) {
+            throw new Error('Failed to load more matches');
+          }
+          return response.json();
+        })
+        .then((data) => {
+          setMatches((prev) => {
+            // Filter out duplicates by match ID
+            const existingIds = new Set(prev.map((m: MatchRecord) => m.id));
+            const newMatches = (data.matches || []).filter((m: MatchRecord) => !existingIds.has(m.id));
+            return [...prev, ...newMatches];
+          });
+          setPagination(data.pagination);
+        })
+        .catch((error) => {
+          console.error('Error loading more matches:', error);
+        })
+        .finally(() => {
+          setIsLoadingMore(false);
+        });
 
-      if (!response.ok) {
-        throw new Error('Failed to load more matches');
-      }
+      return currentPagination;
+    });
+  }, [isLoadingMore]);
 
-      const data = await response.json();
-      setMatches((prev) => [...prev, ...(data.matches || [])]);
-      setPagination(data.pagination);
-    } catch (error) {
-      console.error('Error loading more matches:', error);
-    } finally {
-      setIsLoadingMore(false);
-    }
-  }, [pagination, isLoadingMore]);
-
-  // Intersection Observer for infinite scroll
+  // Intersection Observer for infinite scroll - stable observer
   useEffect(() => {
+    if (!pagination?.hasMore) return;
+
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries[0].isIntersecting && pagination?.hasMore && !isLoadingMore) {
+        if (entries[0].isIntersecting && pagination.hasMore && !isLoadingMore) {
           loadMoreMatches();
         }
       },
-      { threshold: 0.1 }
+      { threshold: 0.1, rootMargin: '100px' } // Trigger earlier for smoother UX
     );
 
     const currentTarget = observerTarget.current;
@@ -141,11 +146,25 @@ export default function MatchesPage() {
         observer.unobserve(currentTarget);
       }
     };
-  }, [pagination, isLoadingMore, loadMoreMatches]);
+  }, [pagination?.hasMore, isLoadingMore, loadMoreMatches]);
+
+  // Memoized values - must be called before any conditional returns
+  const hasMatches = useMemo(() => matches.length > 0, [matches.length]);
+  
+  // Count only matches with actual score > 40% (0.4)
+  const highQualityMatchCount = useMemo(() => {
+    return matches.filter(match => match.score > 0.4).length;
+  }, [matches]);
+  
+  const matchCountText = useMemo(() => {
+    if (!hasMatches) return 'Upload a resume to see personalized startup matches.';
+    const count = highQualityMatchCount;
+    return `Congrats! You directly matched with ${count} startup${count === 1 ? '' : 's'}! Review these companies and send personalized emails.`;
+  }, [hasMatches, highQualityMatchCount]);
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-900 via-blue-800 to-indigo-900 dark:from-zinc-900 dark:via-zinc-950 dark:to-black">
+      <div className="min-h-screen" style={{ backgroundColor: '#0E1422' }}>
         <Header initialUser={user} />
         <section className="py-20">
           <div className="container mx-auto px-4">
@@ -160,7 +179,7 @@ export default function MatchesPage() {
 
   if (hasError || !user) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-900 via-blue-800 to-indigo-900 dark:from-zinc-900 dark:via-zinc-950 dark:to-black">
+      <div className="min-h-screen" style={{ backgroundColor: '#0E1422' }}>
         <Header initialUser={user} />
         <section className="py-20">
           <div className="container mx-auto px-4">
@@ -173,67 +192,32 @@ export default function MatchesPage() {
     );
   }
 
-  const isPremium = candidate ? isSubscribed(candidate) : false;
-  const isFree = !isPremium;
-  const hasMatches = matches.length > 0;
-
-  // For free users, limit to 1 match
-  const displayedMatches = isFree ? matches.slice(0, 1) : matches;
-  const hiddenMatchCount = isFree ? Math.max(0, (pagination?.total || 0) - 1) : 0;
-
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-900 via-blue-800 to-indigo-900 dark:from-zinc-900 dark:via-zinc-950 dark:to-black">
+    <div className="min-h-screen" style={{ backgroundColor: '#0E1422' }}>
       <Header initialUser={user} />
       <section className="py-20">
-        <div className="container mx-auto px-4 space-y-10">
-          <div className="text-center space-y-4">
-            <div className="flex items-center justify-center gap-4 flex-wrap">
-              <h1 className="text-4xl md:text-5xl font-bold text-blue-300">Startups excited to meet you</h1>
+        <div className="container mx-auto px-4 space-y-12">
+          <div className="max-w-4xl mx-auto text-center space-y-12">
+            <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-1000">
+              <h1 className="text-5xl md:text-7xl font-bold text-white leading-tight">
+                Startups excited to meet you
+              </h1>
+              <p className="text-md md:text-xl text-white/80 max-w-2xl mx-auto">
+                {matchCountText}
+              </p>
             </div>
-            <p className="text-white/90 text-lg">
-              {hasMatches
-                ? isPremium
-                  ? `Congrats! You matched with ${pagination?.total || matches.length} startup${
-                      (pagination?.total || matches.length) === 1 ? '' : 's'
-                    }! Review your matches and send personalized emails.`
-                  : `You matched with ${pagination?.total || matches.length} startup${
-                      (pagination?.total || matches.length) === 1 ? '' : 's'
-                    }! Upgrade to Premium to see all matches and unlock premium features.`
-                : 'Upload a resume to see personalized startup matches.'}
-            </p>
-            {isPremium && candidate?.stripe_customer_id && (
-              <ManageSubscriptionButton email={user.email ?? ''} />
-            )}
           </div>
-
-          {/* Free tier upgrade modal */}
-          <UpgradeModalWrapper
-            shouldShow={hasMatches && isFree}
-            hiddenMatchCount={hiddenMatchCount}
-            email={user.email ?? ''}
-          />
 
           {hasMatches ? (
             <div>
               <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-                {displayedMatches.map((match) => (
+                {matches.map((match) => (
                   <MatchCard key={match.id} match={match} />
                 ))}
-                
-                {/* Blurred preview of additional matches (free tier only) */}
-                {isFree && hiddenMatchCount > 0 && (
-                  <>
-                    {matches.slice(1, Math.min(10, matches.length)).map((match) => (
-                      <div key={match.id} className="blur-md pointer-events-none select-none opacity-60">
-                        <MatchCard match={match} />
-                      </div>
-                    ))}
-                  </>
-                )}
               </div>
 
               {/* Loading indicator for infinite scroll */}
-              {isPremium && pagination?.hasMore && (
+              {pagination?.hasMore && (
                 <div ref={observerTarget} className="py-8 text-center">
                   {isLoadingMore ? (
                     <p className="text-white/70">Loading more matches...</p>
@@ -244,7 +228,7 @@ export default function MatchesPage() {
               )}
 
               {/* End of results */}
-              {isPremium && !pagination?.hasMore && matches.length > 0 && (
+              {!pagination?.hasMore && matches.length > 0 && (
                 <div className="py-8 text-center">
                   <p className="text-white/70">You've seen all your matches!</p>
                 </div>

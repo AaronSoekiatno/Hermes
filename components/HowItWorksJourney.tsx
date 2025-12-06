@@ -31,7 +31,7 @@ export const HowItWorksJourney = () => {
     <section className="py-12 sm:py-16 md:py-20 w-full relative bg-gradient-to-b from-transparent via-black/20 to-transparent">
       <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 md:px-8">
         <div className="text-center max-w-3xl mx-auto mb-10 sm:mb-12 md:mb-16">
-          <h2 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-bold text-white mb-3 sm:mb-4 px-2">
+          <h2 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-bold text-white mb-4 md:mb-6 px-2">
             Three ways we help your job search
           </h2>
         </div>
